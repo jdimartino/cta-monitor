@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor CTA Tenis</title>
+    <!-- Modern Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js for the Performance Chart -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon"><i class="ri-tennis-ball-fill"></i></div>
+                <h2>CTA Monitor</h2>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active"><i class="ri-dashboard-line"></i> <span>Inicio</span></a>
+                <a href="#" class="nav-item"><i class="ri-group-line"></i> <span>Mi Equipo</span></a>
+                <a href="#" class="nav-item"><i class="ri-trophy-line"></i> <span>Posiciones</span></a>
+                <a href="#" class="nav-item"><i class="ri-magic-line"></i> <span>Predictor de Draw</span></a>
+            </nav>
+
+            <div class="user-profile">
+                <div class="avatar"><i class="ri-user-smile-line"></i></div>
+                <div class="user-info">
+                    <span class="user-name" id="userNameLabel">Cargando...</span>
+                    <span class="user-role">Liga 32 / Cat 6</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="topbar">
+                <div class="search-bar">
+                    <i class="ri-search-line"></i>
+                    <input type="text" placeholder="Buscar equipos, jugadores...">
+                </div>
+                <div class="topbar-actions">
+                    <button class="icon-btn"><i class="ri-notification-3-line"></i><span class="badge"></span></button>
+                    <button class="icon-btn primary-btn"><i class="ri-refresh-line"></i> Sincronizar</button>
+                </div>
+            </header>
+
+            <div class="content-grid">
+                <!-- KPI Section -->
+                <section class="kpi-section">
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Posición en Liga</span>
+                            <div class="kpi-icon blue"><i class="ri-bar-chart-grouped-line"></i></div>
+                        </div>
+                        <h3 class="kpi-value" id="valPosition">#--</h3>
+                        <div class="kpi-footer">
+                            <span class="trend positive"><i class="ri-arrow-up-line"></i> Zona Alta</span>
+                        </div>
+                    </div>
+                    
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-header">
+                            <span class="kpi-title">Puntos Totales</span>
+                            <div class="kpi-icon green"><i class="ri-medal-fill"></i></div>
+                        </div>
+                        <h3 class="kpi-value" id="valPoints">--</h3>
+                        <div class="kpi-footer">
+                            <span class="trend neutral">Acumulando</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card glass-panel">
+                        <div class="kpi-header">
+                            <span class="kpi-title">% de Victorias</span>
+                            <div class="kpi-icon purple"><i class="ri-focus-2-line"></i></div>
+                        </div>
+                        <h3 class="kpi-value" id="valWinRate">--%</h3>
+                        <div class="kpi-footer">
+                            <span class="trend negative" id="valMatchesPlayed">0 Partidos Jugados</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Middle Section: Chart & Recent -->
+                <section class="middle-section">
+                    <div class="chart-container glass-panel">
+                        <div class="panel-header">
+                            <h3>Tendencia de Rendimiento</h3>
+                            <select class="minimal-select"><option>Esta Temporada</option></select>
+                        </div>
+                        <div class="canvas-wrapper">
+                            <canvas id="performanceChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="recent-matches glass-panel">
+                        <div class="panel-header">
+                            <h3>Últimos Partidos</h3>
+                            <a href="#" class="view-all">Ver Todos</a>
+                        </div>
+                        <div class="matches-list" id="matchesList">
+                            <!-- Populated by JS -->
+                            <div class="loading-spinner"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Bottom Section: Next Draw -->
+                <section class="bottom-section">
+                    <div class="draw-predictor glass-panel">
+                        <div class="panel-header">
+                            <h3>Sugerencia de Draw (Ejemplo: ID 7361)</h3>
+                            <button class="primary-btn small" onclick="runPredictor(7361)">Predecir</button>
+                        </div>
+                        <div class="predictor-content" id="predictorContent">
+                            <p class="empty-state">Haz clic en Predecir para calcular la alineación óptima.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

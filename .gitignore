@@ -1,0 +1,23 @@
+# Environment
+.env
+
+# Data
+data/
+cta_state.json
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
