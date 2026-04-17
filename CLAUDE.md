@@ -77,3 +77,20 @@ cta-monitor/
 - Los standings del grupo tienen `sets_won IS NOT NULL` (los de la liga general no)
 - La sesión de scraping se cachea en `data/session.pkl` (válida 4 horas)
 - Zona horaria del dashboard: America/Caracas (UTC-4)
+
+
+## GitHub Workflow
+
+Para trabajar en este proyecto desde cualquier Mac:
+
+1. Clone el repositorio o abra VS Code con el workspace file
+2. Haga cambios en el código
+3. Use PushGlobal desde su Mac para subir todo a GitHub (incluyendo la Mac Mini)
+4. Use PullGlobal para descargar cambios en todas las máquinas
+
+Los scripts automáticamente:
+- Sincronizar cambios entre macs
+- Hacer commits con mensajes descriptivos
+- Subir todo a GitHub
+- Excluir archivos sensibles (.env, data/, logs/)
+
