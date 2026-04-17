@@ -1,0 +1,28 @@
+{
+  "folders": [
+    {
+      "uri": "vscode-remote://ssh-remote+mac-mini/Users/jdimartino/Desktop/Antigravity/cta-monitor",
+      "name": "CTA Monitor (Remote Mac Mini)"
+    }
+  ],
+  "settings": {
+    "remote.SSH.remotePlatform": {
+      "mac-mini": "macos"
+    },
+    "remote.SSH.defaultExtensions": [
+      "ms-python.python",
+      "ms-python.pylance"
+    ],
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/*.pyc": true
+    },
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "editor.formatOnSave": false
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-vscode-remote.remote-ssh"
+    ]
+  }
+}
