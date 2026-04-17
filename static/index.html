@@ -4,28 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitor CTA Tenis</title>
-    <!-- Modern Font -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Chart.js for the Performance Chart -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Icons -->
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="dashboard">
-        <!-- Sidebar -->
+
+        <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
         <aside class="sidebar">
             <div class="logo">
                 <div class="logo-icon"><i class="ri-tennis-ball-fill"></i></div>
                 <h2>CTA Monitor</h2>
             </div>
-            
+
             <nav class="nav-menu">
-                <a href="#" class="nav-item active"><i class="ri-dashboard-line"></i> <span>Inicio</span></a>
-                <a href="#" class="nav-item"><i class="ri-group-line"></i> <span>Mi Equipo</span></a>
-                <a href="#" class="nav-item"><i class="ri-trophy-line"></i> <span>Posiciones</span></a>
-                <a href="#" class="nav-item"><i class="ri-magic-line"></i> <span>Predictor de Draw</span></a>
+                <a href="#" class="nav-item active" data-view="inicio">
+                    <i class="ri-dashboard-line"></i> <span>Inicio</span>
+                </a>
+                <a href="#" class="nav-item" data-view="equipo">
+                    <i class="ri-group-line"></i> <span>Mi Equipo</span>
+                </a>
+                <a href="#" class="nav-item" data-view="posiciones">
+                    <i class="ri-trophy-line"></i> <span>Posiciones</span>
+                </a>
+                <a href="#" class="nav-item" data-view="predictor">
+                    <i class="ri-magic-line"></i> <span>Predictor de Draw</span>
+                </a>
             </nav>
 
             <div class="user-profile">
@@ -37,95 +43,200 @@
             </div>
         </aside>
 
-        <!-- Main Content -->
+        <!-- ═══════════════════ MAIN ═══════════════════ -->
         <main class="main-content">
+
+            <!-- Topbar -->
             <header class="topbar">
-                <div class="search-bar">
+                <div class="search-bar" id="searchBar">
                     <i class="ri-search-line"></i>
-                    <input type="text" placeholder="Buscar equipos, jugadores...">
+                    <input type="text" placeholder="Buscar equipos, jugadores..." id="searchInput" autocomplete="off">
                 </div>
                 <div class="topbar-actions">
-                    <button class="icon-btn"><i class="ri-notification-3-line"></i><span class="badge"></span></button>
-                    <button class="icon-btn primary-btn"><i class="ri-refresh-line"></i> Sincronizar</button>
+                    <span class="sync-status" id="syncStatus"></span>
+                    <button class="icon-btn" id="bellBtn" onclick="toggleNotifications()"><i class="ri-notification-3-line"></i><span class="badge"></span></button>
+                    <button class="icon-btn primary-btn" id="syncBtn" onclick="syncData()">
+                        <i class="ri-refresh-line"></i> Sincronizar
+                    </button>
+                    <button class="icon-btn group-btn" id="groupBtn" onclick="groupSync()" title="Actualiza posiciones y calendario del grupo (~5 seg)">
+                        <i class="ri-calendar-check-line"></i> Actualizar Grupo
+                    </button>
+                    <button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Descarga todos los equipos y jugadores (~5 min)">
+                        <i class="ri-database-2-line"></i> Crawl Completo
+                    </button>
                 </div>
             </header>
 
-            <div class="content-grid">
-                <!-- KPI Section -->
-                <section class="kpi-section">
-                    <div class="kpi-card glass-panel">
-                        <div class="kpi-header">
-                            <span class="kpi-title">Posición en Liga</span>
-                            <div class="kpi-icon blue"><i class="ri-bar-chart-grouped-line"></i></div>
-                        </div>
-                        <h3 class="kpi-value" id="valPosition">#--</h3>
-                        <div class="kpi-footer">
-                            <span class="trend positive"><i class="ri-arrow-up-line"></i> Zona Alta</span>
-                        </div>
-                    </div>
-                    
-                    <div class="kpi-card glass-panel">
-                        <div class="kpi-header">
-                            <span class="kpi-title">Puntos Totales</span>
-                            <div class="kpi-icon green"><i class="ri-medal-fill"></i></div>
-                        </div>
-                        <h3 class="kpi-value" id="valPoints">--</h3>
-                        <div class="kpi-footer">
-                            <span class="trend neutral">Acumulando</span>
-                        </div>
-                    </div>
+            <!-- ─────────── VISTA: INICIO ─────────── -->
+            <div id="view-inicio" class="view-section active">
+                <div class="content-grid">
 
-                    <div class="kpi-card glass-panel">
-                        <div class="kpi-header">
-                            <span class="kpi-title">% de Victorias</span>
-                            <div class="kpi-icon purple"><i class="ri-focus-2-line"></i></div>
+                    <!-- KPIs -->
+                    <section class="kpi-section">
+                        <div class="kpi-card glass-panel">
+                            <div class="kpi-header">
+                                <span class="kpi-title">Posición en Liga</span>
+                                <div class="kpi-icon blue"><i class="ri-bar-chart-grouped-line"></i></div>
+                            </div>
+                            <h3 class="kpi-value" id="valPosition">#--</h3>
+                            <div class="kpi-footer">
+                                <span class="trend positive"><i class="ri-arrow-up-line"></i> Zona Alta</span>
+                            </div>
                         </div>
-                        <h3 class="kpi-value" id="valWinRate">--%</h3>
-                        <div class="kpi-footer">
-                            <span class="trend negative" id="valMatchesPlayed">0 Partidos Jugados</span>
-                        </div>
-                    </div>
-                </section>
 
-                <!-- Middle Section: Chart & Recent -->
-                <section class="middle-section">
-                    <div class="chart-container glass-panel">
-                        <div class="panel-header">
-                            <h3>Tendencia de Rendimiento</h3>
-                            <select class="minimal-select"><option>Esta Temporada</option></select>
+                        <div class="kpi-card glass-panel">
+                            <div class="kpi-header">
+                                <span class="kpi-title">Puntos Totales</span>
+                                <div class="kpi-icon green"><i class="ri-medal-fill"></i></div>
+                            </div>
+                            <h3 class="kpi-value" id="valPoints">--</h3>
+                            <div class="kpi-footer">
+                                <span class="trend neutral">Acumulando</span>
+                            </div>
                         </div>
-                        <div class="canvas-wrapper">
-                            <canvas id="performanceChart"></canvas>
-                        </div>
-                    </div>
 
-                    <div class="recent-matches glass-panel">
-                        <div class="panel-header">
-                            <h3>Últimos Partidos</h3>
-                            <a href="#" class="view-all">Ver Todos</a>
+                        <div class="kpi-card glass-panel">
+                            <div class="kpi-header">
+                                <span class="kpi-title">% de Victorias</span>
+                                <div class="kpi-icon purple"><i class="ri-focus-2-line"></i></div>
+                            </div>
+                            <h3 class="kpi-value" id="valWinRate">--%</h3>
+                            <div class="kpi-footer">
+                                <span class="trend neutral" id="valMatchesPlayed">0 Partidos Jugados</span>
+                            </div>
                         </div>
-                        <div class="matches-list" id="matchesList">
-                            <!-- Populated by JS -->
-                            <div class="loading-spinner"></div>
-                        </div>
-                    </div>
-                </section>
+                    </section>
 
-                <!-- Bottom Section: Next Draw -->
-                <section class="bottom-section">
-                    <div class="draw-predictor glass-panel">
-                        <div class="panel-header">
-                            <h3>Sugerencia de Draw (Ejemplo: ID 7361)</h3>
-                            <button class="primary-btn small" onclick="runPredictor(7361)">Predecir</button>
+                    <!-- Gráfico + Partidos recientes -->
+                    <section class="middle-section">
+                        <div class="chart-container glass-panel">
+                            <div class="panel-header">
+                                <h3>Tendencia de Rendimiento</h3>
+                                <select class="minimal-select"><option>Esta Temporada</option></select>
+                            </div>
+                            <div class="canvas-wrapper">
+                                <canvas id="performanceChart"></canvas>
+                            </div>
                         </div>
-                        <div class="predictor-content" id="predictorContent">
-                            <p class="empty-state">Haz clic en Predecir para calcular la alineación óptima.</p>
+
+                        <div class="recent-matches glass-panel">
+                            <div class="panel-header">
+                                <h3>Últimos Partidos</h3>
+                                <a href="#" class="view-all" onclick="navigateTo('posiciones'); return false;">Ver Todos</a>
+                            </div>
+                            <div class="matches-list" id="matchesList">
+                                <div class="loading-spinner"></div>
+                            </div>
                         </div>
-                    </div>
-                </section>
-            </div>
+                    </section>
+
+
+                </div>
+            </div><!-- /view-inicio -->
+
+            <!-- ─────────── VISTA: MI EQUIPO ─────────── -->
+            <div id="view-equipo" class="view-section">
+                <div class="content-grid">
+
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <div class="page-icon purple"><i class="ri-group-fill"></i></div>
+                                <div>
+                                    <h2 id="teamNameHeading">Mi Equipo</h2>
+                                    <p class="page-subtitle">Liga 32 · Categoría 6</p>
+                                </div>
+                            </div>
+                            <div class="team-quick-stats" id="teamQuickStats">
+                                <div class="loading-inline"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Nómina de Jugadores</h3>
+                                <span class="badge-count" id="playerCount">cargando...</span>
+                            </div>
+                            <div id="playerRoster" class="player-roster">
+                                <div class="loading-spinner"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div><!-- /view-equipo -->
+
+            <!-- ─────────── VISTA: POSICIONES ─────────── -->
+            <div id="view-posiciones" class="view-section">
+                <div class="content-grid">
+
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <div class="page-icon green"><i class="ri-trophy-fill"></i></div>
+                                <div>
+                                    <h2>Tabla de Posiciones</h2>
+                                    <p class="page-subtitle">Liga 32 · Categoría 6 · Temporada Actual</p>
+                                </div>
+                            </div>
+                            <span class="sync-badge" id="standingsLastSync">--</span>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div id="standingsTable" class="standings-table-wrap">
+                                <div class="loading-spinner"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div><!-- /view-posiciones -->
+
+            <!-- ─────────── VISTA: PREDICTOR DE DRAW ─────────── -->
+            <div id="view-predictor" class="view-section">
+                <div class="content-grid">
+
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <div class="page-icon blue"><i class="ri-magic-fill"></i></div>
+                                <div>
+                                    <h2>Predictor de Draw</h2>
+                                    <p class="page-subtitle">Calcula la alineación óptima contra cualquier rival</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Selecciona el Equipo Rival</h3>
+                            </div>
+                            <div class="predictor-controls">
+                                <select id="rivalSelect" class="rival-select">
+                                    <option value="">-- Cargando equipos... --</option>
+                                </select>
+                                <button class="primary-btn predict-run-btn" onclick="runFullPredictor()">
+                                    <i class="ri-magic-line"></i> Predecir Draw
+                                </button>
+                            </div>
+                            <div id="fullPredictorContent" class="predictor-content full">
+                                <p class="empty-state">Selecciona un rival y haz clic en <strong>Predecir Draw</strong>.</p>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div><!-- /view-predictor -->
+
         </main>
     </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>

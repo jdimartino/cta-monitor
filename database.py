@@ -244,14 +244,18 @@ def insert_standings(team_id: int, data: dict) -> int:
 def get_latest_standings(league_id: int = None) -> list[dict]:
     """Get the most recent standings snapshot for each team."""
     with get_connection() as conn:
+        # Only show standings from the group page (sets_won IS NOT NULL).
+        # Legacy rows from the general league crawl have sets_won = NULL and
+        # are excluded so the table only reflects the real group standings.
         query = """
             SELECT s.*, t.name as team_name, t.cta_id as team_cta_id
             FROM standings s
             JOIN teams t ON s.team_id = t.id
-            WHERE s.scraped_at = (
-                SELECT MAX(s2.scraped_at) FROM standings s2
+            WHERE s.id = (
+                SELECT MAX(s2.id) FROM standings s2
                 WHERE s2.team_id = s.team_id
             )
+            AND s.sets_won IS NOT NULL
         """
         if league_id:
             query += " AND t.league_id = ?"

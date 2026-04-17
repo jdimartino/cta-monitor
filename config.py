@@ -39,9 +39,10 @@ REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "2.0"))
 MAX_PAGES_PER_CRAWL = int(os.getenv("MAX_PAGES_PER_CRAWL", "200"))
 
 # ── Known IDs (configurable) ──
-OWN_TEAM_ID = int(os.getenv("OWN_TEAM_ID", "7361"))
-LIGA_ID = int(os.getenv("LIGA_ID", "32"))
+OWN_TEAM_ID  = int(os.getenv("OWN_TEAM_ID",  "7361"))
+LIGA_ID      = int(os.getenv("LIGA_ID",      "32"))
 CATEGORIA_ID = int(os.getenv("CATEGORIA_ID", "6"))
+GROUP_ID     = int(os.getenv("GROUP_ID",     "1282"))  # Grupo 5, Liga 32 Cat 6
 
 # ── Legacy state file (for migration) ──
 LEGACY_STATE_FILE = BASE_DIR / "cta_state.json"

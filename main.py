@@ -179,7 +179,29 @@ def sync():
     click.echo(f"[Sync] Actualizando equipo propio ({config.OWN_TEAM_ID})...")
     spider.crawl_single_team(config.OWN_TEAM_ID, session)
 
+    # Crawl group page (standings + fixtures for our group)
+    click.echo(f"[Sync] Actualizando grupo {config.GROUP_ID}...")
+    spider.crawl_group(config.GROUP_ID, session)
+
     click.echo("[Sync] Completado.")
+
+
+@cli.command()
+def group():
+    """Crawl solo la pagina del grupo (posiciones + fixture)."""
+    import spider
+    import auth
+
+    session = auth.get_session()
+    if not session:
+        click.echo("Error: No se pudo autenticar.")
+        sys.exit(1)
+
+    click.echo(f"[Group] Scrapeando grupo {config.GROUP_ID}...")
+    result = spider.crawl_group(config.GROUP_ID, session)
+    click.echo(f"[Group] Posiciones guardadas: {result.get('standings', 0)}")
+    click.echo(f"[Group] Partidos guardados:   {result.get('fixtures', 0)}")
+    click.echo("[Group] Completado.")
 
 
 if __name__ == "__main__":
