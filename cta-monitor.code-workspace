@@ -1,8 +1,8 @@
 {
   "folders": [
     {
-      "uri": "vscode-remote://ssh-remote+mac-mini/Users/jdimartino/Desktop/Antigravity/cta-monitor",
-      "name": "CTA Monitor (Remote Mac Mini)"
+      "path": ".",
+      "name": "CTA Monitor"
     }
   ],
   "settings": {

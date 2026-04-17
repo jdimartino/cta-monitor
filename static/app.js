@@ -3,6 +3,8 @@
 //  Router SPA + handlers de todas las vistas
 // ═══════════════════════════════════════════════════════
 
+const API_BASE = 'http://192.168.1.5:8000';
+
 let performanceChartInstance = null;
 let cachedTeams = [];      // Cache global de equipos para el buscador
 let ownTeamPlayers = [];   // Cache de jugadores propios
@@ -37,7 +39,7 @@ async function initSearch() {
 
     // Precarga equipos en segundo plano
     try {
-        const res = await fetch('/api/teams');
+        const res = await fetch(`${API_BASE}/api/teams`);
         const data = await res.json();
         cachedTeams = data.teams || [];
     } catch (e) { /* silencioso, el buscador simplemente no mostrará equipos */ }
@@ -170,7 +172,7 @@ async function syncData() {
     status.className = 'sync-status';
 
     try {
-        const res = await fetch('/api/sync', { method: 'POST' });
+        const res = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
         const data = await res.json();
 
         if (data.success) {
@@ -210,7 +212,7 @@ async function groupSync() {
     status.className = 'sync-status muted';
 
     try {
-        const res = await fetch('/api/group', { method: 'POST' });
+        const res = await fetch(`${API_BASE}/api/group`, { method: 'POST' });
         const data = await res.json();
 
         if (data.success) {
@@ -249,7 +251,7 @@ async function crawlFull() {
     status.className = 'sync-status muted';
 
     try {
-        const res = await fetch('/api/crawl', { method: 'POST' });
+        const res = await fetch(`${API_BASE}/api/crawl`, { method: 'POST' });
         const data = await res.json();
 
         if (data.success) {
@@ -290,7 +292,7 @@ function formatCaracasTime(sqliteTimestamp) {
 
 async function fetchLastSync() {
     try {
-        const res = await fetch('/api/last-sync');
+        const res = await fetch(`${API_BASE}/api/last-sync`);
         const data = await res.json();
         if (data.last_sync) {
             const formatted = formatCaracasTime(data.last_sync);
@@ -330,9 +332,9 @@ async function toggleNotifications() {
 
     try {
         const [syncRes, dashRes, teamsRes] = await Promise.all([
-            fetch('/api/last-sync'),
-            fetch('/api/dashboard'),
-            fetch('/api/teams'),
+            fetch(`${API_BASE}/api/last-sync`),
+            fetch(`${API_BASE}/api/dashboard`),
+            fetch(`${API_BASE}/api/teams`),
         ]);
         const syncData  = await syncRes.json();
         const dashData  = await dashRes.json();
@@ -394,7 +396,7 @@ async function toggleNotifications() {
 // ─────────────────────────────────────────────
 async function fetchDashboardData() {
     try {
-        const res = await fetch('/api/dashboard');
+        const res = await fetch(`${API_BASE}/api/dashboard`);
         const data = await res.json();
 
         if (data.error) {
@@ -560,8 +562,8 @@ async function fetchTeamData() {
 
     try {
         const [teamRes, dashRes] = await Promise.all([
-            fetch(`/api/team/${ownTeamId}`),
-            fetch('/api/dashboard')
+            fetch(`${API_BASE}/api/team/${ownTeamId}`),
+            fetch(`${API_BASE}/api/dashboard`)
         ]);
         const teamData = await teamRes.json();
         const dash = await dashRes.json();
@@ -638,7 +640,7 @@ async function fetchStandings() {
     container.innerHTML = '<div class="loading-spinner"></div>';
 
     try {
-        const res = await fetch('/api/standings');
+        const res = await fetch(`${API_BASE}/api/standings`);
         const data = await res.json();
         const standings = data.standings || [];
 
@@ -703,7 +705,7 @@ async function fetchRivalTeams() {
     select.innerHTML = '<option value="">-- Cargando equipos... --</option>';
 
     try {
-        const res = await fetch('/api/teams');
+        const res = await fetch(`${API_BASE}/api/teams`);
         const data = await res.json();
         const rivals = (data.teams || []).filter(t => !t.is_own_team);
 
@@ -742,7 +744,7 @@ async function runFullPredictor() {
         </div>`;
 
     try {
-        const res = await fetch(`/api/lineup-predictor/${rivalId}`);
+        const res = await fetch(`${API_BASE}/api/lineup-predictor/${rivalId}`);
         const data = await res.json();
 
         if (!data.our_suggestions || data.our_suggestions.length === 0) {

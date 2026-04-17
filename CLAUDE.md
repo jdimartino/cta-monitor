@@ -2,14 +2,16 @@
 
 ## Arquitectura de trabajo
 
-**TODOS los archivos viven en la Mac Mini, no en el MacBook Air.**
+**Código fuente en MacBook Air. Base de datos y servidor en Mac Mini.**
 
 | Elemento | Ubicación |
 |----------|-----------|
-| Código fuente | `mac-mini:/Users/jdimartino/antigravity/cta-monitor/` |
-| Base de datos | `mac-mini:/Users/jdimartino/antigravity/cta-monitor/data/cta.db` |
-| Servidor web | `http://192.168.1.5:8000` |
+| Código fuente | `macbook:~/Desktop/Antigravity/cta-monitor/` |
+| Base de datos | `mac-mini:~/antigravity/cta-monitor/data/cta.db` |
+| Servidor API | `http://192.168.1.5:8000` (corre en Mac Mini) |
 | SSH alias | `ssh mac-mini` |
+
+El frontend (`static/app.js`) llama directamente a `http://192.168.1.5:8000/api/...` — la Mac Mini atiende todas las consultas de datos.
 
 ## Cómo abrir el proyecto
 
@@ -17,8 +19,9 @@ Doble clic en el archivo:
 ```
 ~/Desktop/Antigravity/cta-monitor.code-workspace
 ```
-VS Code se conecta automáticamente a la Mac Mini y abre la carpeta correcta.
-**No abrir carpetas locales — todo el trabajo es remoto.**
+VS Code abre la carpeta **local** en el MacBook Air. No requiere conexión SSH.
+
+Para ver el dashboard: instala la extensión **Live Server** en VS Code y abre `static/index.html` con "Open with Live Server".
 
 ## Servidor
 
@@ -37,7 +40,7 @@ Ver logs del servidor:
 ssh mac-mini "tail -50 ~/antigravity/cta-monitor/logs/server.log"
 ```
 
-## Comandos CLI (correr en el terminal del IDE — que está en la Mac Mini)
+## Comandos CLI (correr via SSH en la Mac Mini)
 
 ```bash
 python3 main.py group          # Actualizar posiciones + calendario del grupo (~5 seg)
@@ -79,18 +82,33 @@ cta-monitor/
 - Zona horaria del dashboard: America/Caracas (UTC-4)
 
 
-## GitHub Workflow
+## Setup inicial en MacBook Air M1 (primera vez)
 
-Para trabajar en este proyecto desde cualquier Mac:
+```bash
+# 1. Clonar el repositorio
+cd ~/Desktop/Antigravity
+git clone https://github.com/jdimartino/cta-monitor.git
+```
 
-1. Clone el repositorio o abra VS Code con el workspace file
-2. Haga cambios en el código
-3. Use PushGlobal desde su Mac para subir todo a GitHub (incluyendo la Mac Mini)
-4. Use PullGlobal para descargar cambios en todas las máquinas
+Eso es todo. No se necesita Python local ni `.env` — el backend corre en la Mac Mini.
 
-Los scripts automáticamente:
-- Sincronizar cambios entre macs
-- Hacer commits con mensajes descriptivos
-- Subir todo a GitHub
-- Excluir archivos sensibles (.env, data/, logs/)
+**VS Code:**
+1. Abrir `cta-monitor.code-workspace` (doble clic)
+2. Instalar extensión **Live Server** (`ritwickdey.liveserver`)
+3. Click derecho en `static/index.html` → "Open with Live Server"
+4. El dashboard abre en `http://127.0.0.1:5500` y consulta datos desde `192.168.1.5:8000`
+
+## GitHub Workflow (día a día)
+
+```bash
+# Guardar cambios y subir a GitHub
+git add -p                        # revisar cambios
+git commit -m "descripción"
+git push
+
+# En la Mac Mini — actualizar el servidor con los cambios
+ssh mac-mini "cd ~/antigravity/cta-monitor && git pull"
+```
+
+**Archivos excluidos de git** (nunca se suben): `.env`, `data/`, `logs/`
 
