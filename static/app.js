@@ -212,7 +212,7 @@ function navigateTo(viewId) {
     // Cargar datos según vista
     if (viewId === 'inicio')     fetchDashboardData();
     else if (viewId === 'equipo')    fetchTeamData();
-    else if (viewId === 'posiciones') { initCategoryTabs(); fetchStandings(); }
+    else if (viewId === 'posiciones') { initCategoryTabs(); fetchTeamRankings(); }
     else if (viewId === 'predictor') fetchRivalTeams();
 }
 
@@ -828,7 +828,7 @@ function initCategoryTabs() {
                     ? `Liga 32 · Categoría ${cat} · Temporada Actual`
                     : 'Liga 32 · Todas las Categorías · Temporada Actual';
             }
-            fetchStandings(cat);
+            fetchTeamRankings(cat);
         });
     });
 }
@@ -1011,4 +1011,152 @@ async function runFullPredictor() {
     } catch (e) {
         content.innerHTML = `<p class="text-muted">Error al calcular: ${e.message}</p>`;
     }
+}
+
+// ─────────────────────────────────────────────
+// VISTA: CLASIFICACIÓN DE EQUIPOS
+// ─────────────────────────────────────────────
+async function fetchTeamRankings(categoria = null) {
+    const container = document.getElementById('standingsTable');
+    container.innerHTML = '<div class="loading-spinner"></div>';
+
+    const url = categoria
+        ? `${API_BASE}/api/standings?categoria=${encodeURIComponent(categoria)}`
+        : `${API_BASE}/api/standings`;
+
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        const standings = (data.standings || []).sort((a, b) => (b.points || 0) - (a.points || 0));
+
+        if (standings.length === 0) {
+            container.innerHTML =
+                '<p class="text-muted" style="padding:1.5rem">Sin datos de posiciones. Ejecuta una sincronización.</p>';
+            return;
+        }
+
+        // TOP 3 — Podium
+        const top3 = standings.slice(0, 3);
+        let podiumHtml = '<div class="podium-container">';
+        const podiumOrder = [1, 0, 2];
+        podiumOrder.forEach((idx) => {
+            if (!top3[idx]) return;
+            const s = top3[idx];
+            const pos = idx + 1;
+            const isOwn = s.team_cta_id === (ownTeamId || 7361);
+            const medals = ['🥇', '🥈', '🥉'];
+            const heightClasses = ['podium-1st', 'podium-2nd', 'podium-3rd'];
+            const teamFullName = expandTeamName(s.team_name);
+            const winRate = s.played > 0 ? Math.round((s.won / s.played) * 100) : 0;
+
+            podiumHtml += `
+            <div class="podium-card ${heightClasses[idx]} ${isOwn ? 'own-team-podium' : ''}">
+                <div class="podium-medal">${medals[idx]}</div>
+                <div class="podium-rank">#${pos}</div>
+                <div class="podium-team-name" title="${teamFullName}">${teamFullName}</div>
+                ${s.categoria_name ? `<div class="podium-category">${s.categoria_name}</div>` : ''}
+                <div class="podium-stats">
+                    <div class="podium-stat">
+                        <span class="stat-value">${s.points || 0}</span>
+                        <span class="stat-label">pts</span>
+                    </div>
+                    <div class="podium-stat">
+                        <span class="stat-value">${s.won || 0}-${s.lost || 0}</span>
+                        <span class="stat-label">W-L</span>
+                    </div>
+                    <div class="podium-stat">
+                        <span class="stat-value">${winRate}%</span>
+                        <span class="stat-label">%V</span>
+                    </div>
+                </div>
+                ${isOwn ? '<div class="own-badge-podium">TU EQUIPO</div>' : ''}
+            </div>`;
+        });
+        podiumHtml += '</div>';
+
+        // Tabla completa
+        const showCat = !categoria;
+        const rows = standings.map((s, i) => {
+            const isOwn = s.team_cta_id === (ownTeamId || 7361);
+            const catBadge = showCat && s.categoria_name
+                ? `<span class="cat-badge cat-${s.categoria_name}">${s.categoria_name}</span>` : '';
+            const winRate = s.played > 0 ? Math.round((s.won / s.played) * 100) : 0;
+
+            return `
+            <tr class="${isOwn ? 'own-team' : ''}">
+                <td class="pos-cell">${i + 1}</td>
+                <td class="team-cell">
+                    ${catBadge}${expandTeamName(s.team_name) || '?'}
+                    ${isOwn ? '<span class="own-badge">TÚ</span>' : ''}
+                </td>
+                <td>${s.played ?? '-'}</td>
+                <td><strong>${s.won ?? '-'}</strong></td>
+                <td>${s.lost ?? '-'}</td>
+                <td>${s.sets_won ?? '-'}</td>
+                <td>${s.sets_lost ?? '-'}</td>
+                <td>${winRate}%</td>
+                <td class="pts-cell"><strong>${s.points ?? '-'}</strong></td>
+            </tr>`;
+        }).join('');
+
+        container.innerHTML = `
+        <div class="classification-wrapper">
+            ${podiumHtml}
+            <div class="table-section">
+                <div class="table-header-actions">
+                    <h3 style="margin: 0;">Tabla Completa</h3>
+                    <button class="share-btn" onclick="shareClassificationWhatsApp()">
+                        <i class="ri-share-forward-line"></i> Compartir
+                    </button>
+                </div>
+                <table class="standings-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Equipo</th>
+                            <th title="Partidos Jugados">PJ</th>
+                            <th title="Partidos Ganados">PG</th>
+                            <th title="Partidos Perdidos">PP</th>
+                            <th title="Sets Ganados">SG</th>
+                            <th title="Sets Perdidos">SP</th>
+                            <th title="% Victorias">%V</th>
+                            <th title="Puntos">Pts</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </div>`;
+
+    } catch (e) {
+        container.innerHTML = '<p class="text-muted" style="padding:1.5rem">Error al cargar clasificación.</p>';
+        console.error("Error al cargar clasificación:", e);
+    }
+}
+
+function shareClassificationWhatsApp() {
+    const table = document.querySelector('.standings-table');
+    if (!table) return;
+
+    const rows = [];
+    rows.push('🎾 CLASIFICACIÓN CTA TENNIS\n');
+    rows.push('─'.repeat(40));
+
+    const cells = table.querySelectorAll('tbody tr');
+    cells.slice(0, 10).forEach((row) => {
+        const tds = row.querySelectorAll('td');
+        const pos    = tds[0]?.textContent?.trim() || '';
+        const team   = tds[1]?.textContent?.replace(/TÚ|[0-9A-Z]{2}[FM]/g, '').trim() || '';
+        const points = tds[8]?.textContent?.trim() || '-';
+        const won    = tds[3]?.textContent?.trim() || '-';
+        const lost   = tds[4]?.textContent?.trim() || '-';
+        rows.push(`${pos}. ${team.padEnd(25)} ${points} pts (${won}-${lost})`);
+    });
+
+    rows.push('─'.repeat(40));
+    rows.push(`📅 Actualizado: ${new Date().toLocaleString('es-VE')}`);
+    rows.push('#JDMRules #CTAMonitor');
+
+    const encoded = encodeURIComponent(rows.join('\n'));
+    window.open(`https://wa.me/?text=${encoded}`, '_blank');
 }

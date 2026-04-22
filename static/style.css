@@ -1382,3 +1382,239 @@ body {
 .log-line.log-info    { color: var(--accent-blue); }
 .log-line.log-success { color: var(--accent-green); }
 .log-line.log-error   { color: var(--accent-red); }
+
+/* ─────────────────────────────────────────────
+   CLASIFICACIÓN DE EQUIPOS
+   ───────────────────────────────────────────── */
+
+.classification-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.podium-container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 16px;
+    padding: 24px 0;
+    min-height: 320px;
+    background: linear-gradient(135deg, rgba(0,228,255,0.03), rgba(176,107,255,0.02));
+    border-radius: 20px;
+    border: 1px solid rgba(0,228,255,0.1);
+}
+
+.podium-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 18px;
+    border-radius: 16px;
+    background: linear-gradient(145deg, rgba(26, 29, 36, 0.9), rgba(20, 22, 28, 0.7));
+    border: 1px solid rgba(0,228,255,0.2);
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    position: relative;
+    min-width: 140px;
+    text-align: center;
+}
+
+.podium-1st {
+    order: 2;
+    height: 280px;
+    border-color: rgba(255,193,7,0.4);
+    box-shadow: 0 0 20px rgba(255,193,7,0.15);
+}
+
+.podium-2nd {
+    order: 1;
+    height: 240px;
+    border-color: rgba(192,192,192,0.3);
+    box-shadow: 0 0 20px rgba(192,192,192,0.1);
+}
+
+.podium-3rd {
+    order: 3;
+    height: 200px;
+    border-color: rgba(205,127,50,0.3);
+    box-shadow: 0 0 20px rgba(205,127,50,0.1);
+}
+
+.podium-card:hover {
+    transform: translateY(-4px);
+    border-color: rgba(0,228,255,0.4);
+    box-shadow: 0 8px 24px rgba(0,228,255,0.2);
+}
+
+.podium-card.own-team-podium {
+    border-color: var(--accent-blue);
+    background: linear-gradient(145deg, rgba(0,228,255,0.08), rgba(0,228,255,0.03));
+}
+
+.podium-medal {
+    font-size: 48px;
+    line-height: 1;
+    animation: medal-bounce 0.6s ease-out;
+}
+
+@keyframes medal-bounce {
+    0% { transform: scale(0) translateY(20px); }
+    70% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+.podium-rank {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.podium-team-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+    word-wrap: break-word;
+    max-width: 130px;
+}
+
+.podium-category {
+    font-size: 11px;
+    padding: 2px 6px;
+    background: rgba(0,228,255,0.1);
+    color: var(--accent-blue);
+    border-radius: 8px;
+}
+
+.podium-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 0;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.podium-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: center;
+}
+
+.stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
+.stat-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.own-badge-podium {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,228,255,0.2);
+    color: var(--accent-blue);
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1px solid var(--accent-blue);
+}
+
+.table-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.table-header-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 0 12px 0;
+}
+
+.table-header-actions h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.share-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background-color: #25D366;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.share-btn:hover {
+    background-color: #1fa355;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(37,211,102,0.3);
+}
+
+.share-btn i {
+    font-size: 14px;
+}
+
+@media (max-width: 1024px) {
+    .podium-container {
+        gap: 8px;
+        min-height: 280px;
+    }
+    .podium-card {
+        min-width: 110px;
+        padding: 14px 10px;
+    }
+    .podium-1st { height: 240px; }
+    .podium-2nd { height: 200px; }
+    .podium-3rd { height: 160px; }
+    .podium-medal { font-size: 36px; }
+    .podium-team-name { font-size: 12px; }
+    .stat-value { font-size: 14px; }
+}
+
+@media (max-width: 768px) {
+    .podium-container {
+        flex-wrap: wrap;
+        justify-content: space-around;
+        gap: 12px;
+        min-height: auto;
+        padding: 16px;
+    }
+    .podium-card {
+        order: revert !important;
+        height: auto !important;
+        min-width: 100px;
+        flex: 1;
+    }
+    .table-header-actions {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+    }
+    .share-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
