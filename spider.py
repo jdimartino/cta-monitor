@@ -498,7 +498,9 @@ def crawl_standings(session, liga_id: int = None, cat_id: int = None) -> list[di
 
         if cta_id:
             is_own = cta_id == config.OWN_TEAM_ID
-            db_team_id = database.upsert_team(cta_id, name, league_id, is_own)
+            # Don't overwrite own team's league when it appears as nav widget in foreign categories
+            team_league_id = league_id if (not is_own or cat_id == config.CATEGORIA_ID) else None
+            db_team_id = database.upsert_team(cta_id, name, team_league_id, is_own)
 
             # Record standing if we have stats
             if team_data.get("position") is not None:
