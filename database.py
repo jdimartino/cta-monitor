@@ -31,15 +31,54 @@ def get_connection():
         conn.close()
 
 
+def migrate_schema():
+    """Add new columns to existing tables without dropping data."""
+    migrations = [
+        "ALTER TABLE leagues ADD COLUMN gender TEXT",
+        "ALTER TABLE leagues ADD COLUMN level INTEGER",
+        "ALTER TABLE leagues ADD COLUMN categoria_name TEXT",
+        """CREATE TABLE IF NOT EXISTS player_match_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id       INTEGER NOT NULL REFERENCES players(id),
+            match_date      TEXT,
+            opponent_name   TEXT,
+            opponent_cta_id INTEGER,
+            result          TEXT,
+            score           TEXT,
+            rubber_type     TEXT,
+            partner_name    TEXT,
+            scraped_at      TEXT DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_pmh_player ON player_match_history(player_id)",
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_pmh_dedup
+           ON player_match_history(
+             player_id,
+             match_date,
+             COALESCE(rubber_type, ''),
+             COALESCE(opponent_name, '')
+           )""",
+    ]
+    with get_connection() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except Exception:
+                pass  # already exists
+
+
 def init_db():
     """Create all tables if they don't exist."""
+    migrate_schema()
     with get_connection() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS leagues (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                liga_id      INTEGER NOT NULL,
-                categoria_id INTEGER NOT NULL,
-                name         TEXT,
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                liga_id        INTEGER NOT NULL,
+                categoria_id   INTEGER NOT NULL,
+                name           TEXT,
+                gender         TEXT,
+                level          INTEGER,
+                categoria_name TEXT,
                 UNIQUE(liga_id, categoria_id)
             );
 
@@ -130,6 +169,11 @@ def init_db():
                 last_hash    TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS clubs (
+                acronym      TEXT PRIMARY KEY,
+                name         TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_standings_team ON standings(team_id);
             CREATE INDEX IF NOT EXISTS idx_standings_scraped ON standings(scraped_at);
             CREATE INDEX IF NOT EXISTS idx_players_team ON players(team_id);
@@ -141,15 +185,51 @@ def init_db():
 
 
 # ─────────────────────────────────────────────
-# LEAGUES
+# CLUBS
 # ─────────────────────────────────────────────
-def upsert_league(liga_id: int, categoria_id: int, name: str = None) -> int:
+def upsert_club(acronym: str, name: str):
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO leagues (liga_id, categoria_id, name)
-               VALUES (?, ?, ?)
-               ON CONFLICT(liga_id, categoria_id) DO UPDATE SET name=excluded.name""",
-            (liga_id, categoria_id, name),
+            """INSERT INTO clubs (acronym, name)
+               VALUES (?, ?)
+               ON CONFLICT(acronym) DO UPDATE SET name=excluded.name""",
+            (acronym.upper(), name),
+        )
+
+
+def get_club_by_acronym(acronym: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM clubs WHERE acronym=?", (acronym.upper(),)).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_clubs() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM clubs ORDER BY acronym").fetchall()
+        return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# LEAGUES
+# ─────────────────────────────────────────────
+def upsert_league(
+    liga_id: int,
+    categoria_id: int,
+    name: str = None,
+    gender: str = None,
+    level: int = None,
+    categoria_name: str = None,
+) -> int:
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO leagues (liga_id, categoria_id, name, gender, level, categoria_name)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(liga_id, categoria_id) DO UPDATE SET
+                 name=COALESCE(excluded.name, leagues.name),
+                 gender=COALESCE(excluded.gender, leagues.gender),
+                 level=COALESCE(excluded.level, leagues.level),
+                 categoria_name=COALESCE(excluded.categoria_name, leagues.categoria_name)""",
+            (liga_id, categoria_id, name, gender, level, categoria_name),
         )
         row = conn.execute(
             "SELECT id FROM leagues WHERE liga_id=? AND categoria_id=?",
@@ -345,6 +425,55 @@ def get_latest_player_stats(player_cta_id: int) -> dict | None:
                JOIN players p ON ps.player_id = p.id
                WHERE p.cta_id = ?
                ORDER BY ps.scraped_at DESC LIMIT 1""",
+            (player_cta_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+# ─────────────────────────────────────────────
+# PLAYER MATCH HISTORY
+# ─────────────────────────────────────────────
+def upsert_player_match_history(player_id: int, matches: list) -> None:
+    with get_connection() as conn:
+        for m in matches:
+            conn.execute(
+                """INSERT OR IGNORE INTO player_match_history
+                   (player_id, match_date, opponent_name, opponent_cta_id,
+                    result, score, rubber_type, partner_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    player_id,
+                    m.get("match_date"),
+                    m.get("opponent_name"),
+                    m.get("opponent_cta_id"),
+                    m.get("result"),
+                    m.get("score"),
+                    m.get("rubber_type"),
+                    m.get("partner_name"),
+                ),
+            )
+
+
+def get_player_history(player_cta_id: int, limit: int = 20) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT pmh.* FROM player_match_history pmh
+               JOIN players p ON pmh.player_id = p.id
+               WHERE p.cta_id = ?
+               ORDER BY pmh.match_date DESC, pmh.id DESC LIMIT ?""",
+            (player_cta_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_team_by_player(player_cta_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT t.*, l.categoria_name, l.gender
+               FROM teams t
+               JOIN players p ON p.team_id = t.id
+               LEFT JOIN leagues l ON t.league_id = l.id
+               WHERE p.cta_id = ?""",
             (player_cta_id,),
         ).fetchone()
         return dict(row) if row else None
