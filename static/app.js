@@ -3,11 +3,34 @@
 //  Router SPA + handlers de todas las vistas
 // ═══════════════════════════════════════════════════════
 
-const API_BASE = 'http://192.168.1.5:8000';
+const API_BASE = '';
 
 let performanceChartInstance = null;
 let cachedTeams = [];      // Cache global de equipos para el buscador
+let cachedPlayers = [];    // Cache global de jugadores para el buscador
 let ownTeamPlayers = [];   // Cache de jugadores propios
+let clubsMap = {};         // { "TAC": "Club Tachira", ... }
+let ownTeamId = null;      // Se llena desde /api/dashboard
+
+// ─────────────────────────────────────────────
+// NOMBRES COMPLETOS DE EQUIPOS
+// TACA → clubsMap["TAC"] + " A" = "Club Tachira A"
+// ─────────────────────────────────────────────
+async function loadClubs() {
+    try {
+        const res = await fetch(`${API_BASE}/api/clubs`);
+        const data = await res.json();
+        (data.clubs || []).forEach(c => { clubsMap[c.acronym] = c.name; });
+    } catch(e) {}
+}
+
+function expandTeamName(sigla) {
+    if (!sigla) return sigla;
+    const acronym = sigla.slice(0, -1);
+    const letter  = sigla.slice(-1);
+    const club    = clubsMap[acronym];
+    return club ? `${club} ${letter}` : sigla;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
     // Conectar navegación
@@ -19,9 +42,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Carga inicial
-    fetchDashboardData();
-    fetchLastSync();
-    initSearch();
+    loadClubs().then(() => {
+        fetchDashboardData();
+        fetchLastSync();
+        initSearch();
+    });
 });
 
 // ─────────────────────────────────────────────
@@ -37,12 +62,15 @@ async function initSearch() {
     const input = document.getElementById('searchInput');
     if (!input) return;
 
-    // Precarga equipos en segundo plano
+    // Precarga equipos y jugadores en segundo plano
     try {
-        const res = await fetch(`${API_BASE}/api/teams`);
-        const data = await res.json();
-        cachedTeams = data.teams || [];
-    } catch (e) { /* silencioso, el buscador simplemente no mostrará equipos */ }
+        const [teamsRes, playersRes] = await Promise.all([
+            fetch(`${API_BASE}/api/teams`),
+            fetch(`${API_BASE}/api/players`),
+        ]);
+        cachedTeams   = (await teamsRes.json()).teams   || [];
+        cachedPlayers = (await playersRes.json()).players || [];
+    } catch (e) { /* silencioso */ }
 
     // Eventos del input
     input.addEventListener('input', () => renderSearchResults(input.value.trim()));
@@ -65,31 +93,47 @@ function renderSearchResults(query) {
     if (!query || query.length < 1) return;
 
     const q = query.toLowerCase();
-
-    // Filtrar equipos (excluye el propio equipo del resultado de rivals)
-    const teamResults = cachedTeams
-        .filter(t => t.name.toLowerCase().includes(q))
-        .slice(0, 8);
-
     const bar = document.getElementById('searchBar');
     if (!bar) return;
 
+    const teamResults   = cachedTeams.filter(t => expandTeamName(t.name).toLowerCase().includes(q) || t.name.toLowerCase().includes(q)).slice(0, 5);
+    const playerResults = cachedPlayers.filter(p => p.name.toLowerCase().includes(q)).slice(0, 5);
+
     let html = '';
 
-    if (teamResults.length === 0) {
+    if (teamResults.length === 0 && playerResults.length === 0) {
         html = `<div class="search-empty">Sin resultados para "<strong>${query}</strong>"</div>`;
-    } else {
+    }
+
+    if (teamResults.length > 0) {
         html += '<div class="search-group-label">Equipos</div>';
         teamResults.forEach(t => {
             const isOwn = t.is_own_team;
+            const fullName = expandTeamName(t.name);
             html += `
-            <div class="search-result-item" data-id="${t.cta_id}" data-own="${isOwn}" onclick="searchSelectTeam(${t.cta_id}, '${t.name.replace(/'/g,"\\'")}', ${isOwn})">
+            <div class="search-result-item" onclick="searchSelectTeam(${t.cta_id}, '${t.name.replace(/'/g,"\\'")}', ${isOwn})">
                 <i class="ri-${isOwn ? 'home' : 'team'}-line search-result-icon"></i>
                 <div class="search-result-text">
-                    <div class="search-result-name">${highlightMatch(t.name, query)}</div>
-                    <div class="search-result-sub">${isOwn ? 'Tu equipo' : 'Rival · ID ' + t.cta_id}</div>
+                    <div class="search-result-name">${highlightMatch(fullName, query)}${t.categoria_name ? ` <span class="cat-badge cat-${t.categoria_name}">${t.categoria_name}</span>` : ''}</div>
+                    <div class="search-result-sub">${isOwn ? 'Tu equipo' : 'Equipo rival'}</div>
                 </div>
-                <span class="search-result-action">${isOwn ? 'Ver equipo →' : 'Predecir draw →'}</span>
+                <span class="search-result-action">${isOwn ? 'Ver →' : 'Predecir →'}</span>
+            </div>`;
+        });
+    }
+
+    if (playerResults.length > 0) {
+        html += '<div class="search-group-label">Jugadores</div>';
+        playerResults.forEach(p => {
+            const teamFull = expandTeamName(p.team_name);
+            html += `
+            <div class="search-result-item" onclick="searchSelectPlayer(${p.cta_id})">
+                <i class="ri-user-3-line search-result-icon"></i>
+                <div class="search-result-text">
+                    <div class="search-result-name">${highlightMatch(p.name, query)}</div>
+                    <div class="search-result-sub">${teamFull}${p.categoria_name ? ' · ' + p.categoria_name : ''}</div>
+                </div>
+                <span class="search-result-action">Ver →</span>
             </div>`;
         });
     }
@@ -133,6 +177,19 @@ function searchSelectTeam(ctaId, _name, isOwn) {
     }
 }
 
+function searchSelectPlayer(playerCtaId) {
+    closeSearchDropdown();
+    document.getElementById('searchInput').value = '';
+    // Por ahora: navega a Mi Equipo si es jugador propio, o muestra info básica
+    const player = cachedPlayers.find(p => p.cta_id === playerCtaId);
+    if (!player) return;
+    if (player.team_cta_id === (ownTeamId || 7361)) {
+        navigateTo('equipo');
+    } else {
+        searchSelectTeam(player.team_cta_id, player.team_name, false);
+    }
+}
+
 function closeSearchDropdown() {
     const existing = document.getElementById('searchDropdown');
     if (existing) existing.remove();
@@ -155,129 +212,131 @@ function navigateTo(viewId) {
     // Cargar datos según vista
     if (viewId === 'inicio')     fetchDashboardData();
     else if (viewId === 'equipo')    fetchTeamData();
-    else if (viewId === 'posiciones') fetchStandings();
+    else if (viewId === 'posiciones') { initCategoryTabs(); fetchStandings(); }
     else if (viewId === 'predictor') fetchRivalTeams();
+}
+
+// ─────────────────────────────────────────────
+// LOG PANEL EN VIVO
+// ─────────────────────────────────────────────
+let _activeSSE = null;
+
+function openLogPanel(title) {
+    document.getElementById('logPanelTitle').textContent = title;
+    document.getElementById('logOutput').innerHTML = '';
+    document.getElementById('logPanelStatus').textContent = '';
+    document.getElementById('logPanelStatus').className = 'log-status running';
+    document.getElementById('logPanelStatus').textContent = 'En progreso...';
+    document.getElementById('logPanel').classList.add('open');
+}
+
+function closeLogPanel() {
+    document.getElementById('logPanel').classList.remove('open');
+    if (_activeSSE) { _activeSSE.close(); _activeSSE = null; }
+}
+
+function clearLog() {
+    document.getElementById('logOutput').innerHTML = '';
+}
+
+function appendLog(text, type = 'normal') {
+    const out = document.getElementById('logOutput');
+    const line = document.createElement('div');
+    line.className = 'log-line' + (type !== 'normal' ? ' log-' + type : '');
+    line.textContent = text;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+}
+
+function startSSE(url, btnId, btnIdleHTML, title) {
+    // Disable all action buttons while running
+    ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = true;
+    });
+    const btn = document.getElementById(btnId);
+    if (btn) btn.innerHTML = '<i class="ri-loader-4-line spin"></i> En progreso...';
+
+    openLogPanel(title);
+
+    if (_activeSSE) _activeSSE.close();
+    const es = new EventSource(`${API_BASE}${url}`);
+    _activeSSE = es;
+
+    es.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.startsWith('__DONE__')) {
+            const ok = msg === '__DONE__ok';
+            const statusEl = document.getElementById('logPanelStatus');
+            statusEl.textContent = ok ? '✓ Completado' : '✗ Error';
+            statusEl.className = 'log-status ' + (ok ? 'done-ok' : 'done-error');
+            appendLog(ok ? '— Operación completada exitosamente —' : '— Finalizó con error —', ok ? 'success' : 'error');
+            es.close();
+            _activeSSE = null;
+
+            // Re-enable buttons
+            ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) b.disabled = false;
+            });
+            if (btn) btn.innerHTML = btnIdleHTML;
+
+            // Refresh current view
+            const viewId = document.querySelector('.view-section.active')?.id?.replace('view-', '');
+            if (viewId) navigateTo(viewId);
+            fetchLastSync();
+        } else {
+            const type = msg.includes('ERROR') || msg.includes('Error') ? 'error'
+                       : msg.includes('✓') || msg.includes('OK') || msg.includes('completad') ? 'success'
+                       : msg.startsWith('[') ? 'info'
+                       : 'normal';
+            appendLog(msg, type);
+        }
+    };
+
+    es.onerror = () => {
+        appendLog('— Conexión perdida con el servidor —', 'error');
+        const statusEl = document.getElementById('logPanelStatus');
+        statusEl.textContent = '✗ Conexión perdida';
+        statusEl.className = 'log-status done-error';
+        es.close();
+        _activeSSE = null;
+        ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+            const b = document.getElementById(id);
+            if (b) b.disabled = false;
+        });
+        if (btn) btn.innerHTML = btnIdleHTML;
+    };
 }
 
 // ─────────────────────────────────────────────
 // SINCRONIZACIÓN
 // ─────────────────────────────────────────────
-async function syncData() {
-    const btn = document.getElementById('syncBtn');
-    const status = document.getElementById('syncStatus');
-
-    btn.disabled = true;
-    btn.innerHTML = '<i class="ri-loader-4-line spin"></i> Sincronizando...';
-    status.textContent = '';
-    status.className = 'sync-status';
-
-    try {
-        const res = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
-        const data = await res.json();
-
-        if (data.success) {
-            status.textContent = '✓ Sincronizado';
-            status.className = 'sync-status ok';
-            // Refrescar la vista actual con datos nuevos
-            const currentViewId = document.querySelector('.view-section.active')?.id?.replace('view-', '');
-            if (currentViewId) navigateTo(currentViewId);
-            fetchLastSync();
-        } else {
-            status.textContent = '✗ ' + (data.message || 'Error desconocido');
-            status.className = 'sync-status error';
-        }
-    } catch (e) {
-        status.textContent = '✗ Sin conexión con el servidor';
-        status.className = 'sync-status error';
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="ri-refresh-line"></i> Sincronizar';
-        setTimeout(() => {
-            if (status.className !== 'sync-status muted') {
-                status.textContent = '';
-                status.className = 'sync-status';
-            }
-            fetchLastSync();
-        }, 5000);
-    }
+function syncData() {
+    startSSE(
+        '/api/sync/stream',
+        'syncBtn',
+        '<i class="ri-refresh-line"></i> Sincronizar',
+        'Sincronizar — Posiciones + Equipo propio'
+    );
 }
 
-async function groupSync() {
-    const btn = document.getElementById('groupBtn');
-    const status = document.getElementById('syncStatus');
-
-    btn.disabled = true;
-    btn.innerHTML = '<i class="ri-loader-4-line spin"></i> Actualizando...';
-    status.textContent = 'Actualizando grupo...';
-    status.className = 'sync-status muted';
-
-    try {
-        const res = await fetch(`${API_BASE}/api/group`, { method: 'POST' });
-        const data = await res.json();
-
-        if (data.success) {
-            status.textContent = '✓ Grupo actualizado';
-            status.className = 'sync-status ok';
-            const currentViewId = document.querySelector('.view-section.active')?.id?.replace('view-', '');
-            if (currentViewId) navigateTo(currentViewId);
-            fetchLastSync();
-        } else {
-            status.textContent = '✗ ' + (data.message || 'Error desconocido');
-            status.className = 'sync-status error';
-        }
-    } catch (e) {
-        status.textContent = '✗ Sin conexión con el servidor';
-        status.className = 'sync-status error';
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="ri-calendar-check-line"></i> Actualizar Grupo';
-        setTimeout(() => {
-            if (status.className !== 'sync-status muted') {
-                status.textContent = '';
-                status.className = 'sync-status';
-            }
-            fetchLastSync();
-        }, 5000);
-    }
+function groupSync() {
+    startSSE(
+        '/api/group/stream',
+        'groupBtn',
+        '<i class="ri-calendar-check-line"></i> Actualizar Grupo',
+        'Actualizar Grupo — Posiciones + Fixture'
+    );
 }
 
-async function crawlFull() {
-    const btn = document.getElementById('crawlBtn');
-    const status = document.getElementById('syncStatus');
-
-    btn.disabled = true;
-    btn.innerHTML = '<i class="ri-loader-4-line spin"></i> Descargando...';
-    status.textContent = 'Crawl en progreso (puede tardar ~5 min)...';
-    status.className = 'sync-status muted';
-
-    try {
-        const res = await fetch(`${API_BASE}/api/crawl`, { method: 'POST' });
-        const data = await res.json();
-
-        if (data.success) {
-            status.textContent = '✓ Crawl completo finalizado';
-            status.className = 'sync-status ok';
-            const currentViewId = document.querySelector('.view-section.active')?.id?.replace('view-', '');
-            if (currentViewId) navigateTo(currentViewId);
-            fetchLastSync();
-        } else {
-            status.textContent = '✗ ' + (data.message || 'Error desconocido');
-            status.className = 'sync-status error';
-        }
-    } catch (e) {
-        status.textContent = '✗ Sin conexión con el servidor';
-        status.className = 'sync-status error';
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="ri-database-2-line"></i> Crawl Completo';
-        setTimeout(() => {
-            if (status.className !== 'sync-status muted') {
-                status.textContent = '';
-                status.className = 'sync-status';
-            }
-            fetchLastSync();
-        }, 6000);
-    }
+function crawlFull() {
+    startSSE(
+        '/api/crawl/stream',
+        'crawlBtn',
+        '<i class="ri-database-2-line"></i> Crawl Completo',
+        'Crawl Completo — Todas las categorías + jugadores'
+    );
 }
 
 function formatCaracasTime(sqliteTimestamp) {
@@ -406,14 +465,26 @@ async function fetchDashboardData() {
             return;
         }
 
-        document.getElementById('userNameLabel').textContent = data.team_name || 'Mi Equipo';
+        // Guardar ID del equipo propio (fuente única de verdad)
+        if (data.team_cta_id) ownTeamId = data.team_cta_id;
+
+        // Nombres y subtítulos dinámicos
+        const teamFullName = expandTeamName(data.team_name) || 'Mi Equipo';
+        const catName = data.categoria_name || '';
+        const ligaId  = data.liga_id || 32;
+
+        document.getElementById('userNameLabel').textContent = teamFullName;
+        const roleEl = document.getElementById('userRoleLabel');
+        if (roleEl) roleEl.textContent = `Liga ${ligaId} / Cat ${catName}`;
+
+        const equipoSub = document.getElementById('equipoSubtitle');
+        if (equipoSub) equipoSub.textContent = `Liga ${ligaId} · ${catName} · Temporada Actual`;
 
         if (data.data_missing) {
-            // Sin entrada en standings — mostrar estado real en vez de ceros falsos
             document.getElementById('valPosition').textContent = '–';
-            document.querySelector('#valPosition').closest('.kpi-card')
-                .querySelector('.kpi-footer .trend').innerHTML =
+            document.getElementById('trendPosition').innerHTML =
                 '<i class="ri-information-line"></i> Sin datos de tabla';
+            document.getElementById('trendPosition').className = 'trend neutral';
 
             document.getElementById('valPoints').textContent = '–';
             document.querySelector('#valPoints').closest('.kpi-card')
@@ -431,6 +502,24 @@ async function fetchDashboardData() {
                 data.win_rate != null ? `${data.win_rate}%` : '–';
             document.getElementById('valMatchesPlayed').textContent =
                 `${data.matches_played} Partidos Jugados`;
+
+            // Trend de posición dinámico
+            const pos = data.position;
+            const total = data.total_teams || 8;
+            const trendEl = document.getElementById('trendPosition');
+            if (trendEl && pos != null) {
+                const third = Math.ceil(total / 3);
+                if (pos <= third) {
+                    trendEl.className = 'trend positive';
+                    trendEl.innerHTML = `<i class="ri-arrow-up-line"></i> Zona Alta · ${pos} de ${total}`;
+                } else if (pos <= third * 2) {
+                    trendEl.className = 'trend neutral';
+                    trendEl.innerHTML = `<i class="ri-subtract-line"></i> Zona Media · ${pos} de ${total}`;
+                } else {
+                    trendEl.className = 'trend negative';
+                    trendEl.innerHTML = `<i class="ri-arrow-down-line"></i> Zona Baja · ${pos} de ${total}`;
+                }
+            }
         }
 
         renderMatches(data.recent_matches);
@@ -477,7 +566,7 @@ function renderMatches(matches) {
         div.innerHTML = `
             <div class="match-result-badge ${resClass}">${resText}</div>
             <div class="match-info">
-                <div class="match-opp">${m.opponent || 'Rival'}</div>
+                <div class="match-opp">${expandTeamName(m.opponent) || 'Rival'}</div>
                 <div class="match-date">${dateHtml}</div>
             </div>
             <div class="match-score">${scoreHtml}</div>
@@ -505,8 +594,9 @@ function renderChart(matches) {
     });
 
     if (dataPoints.length === 0) {
-        dataPoints.push(50, 60, 55, 75, 70, 90);
-        labels.push("Ene", "Feb", "Mar", "Abr", "May", "Jun");
+        const wrap = document.getElementById('performanceChart').closest('.canvas-wrapper');
+        if (wrap) wrap.innerHTML = '<p class="text-muted" style="text-align:center;padding:3rem 1rem">Sin partidos registrados.<br>Ejecuta un Crawl Completo para obtener historial.</p>';
+        return;
     }
 
     const gradient = ctx.createLinearGradient(0, 0, 0, 400);
@@ -554,7 +644,7 @@ function renderChart(matches) {
 // VISTA: MI EQUIPO
 // ─────────────────────────────────────────────
 async function fetchTeamData() {
-    const ownTeamId = 7361;
+    const teamId = ownTeamId || 7361;
     const roster = document.getElementById('playerRoster');
     const quickStats = document.getElementById('teamQuickStats');
     roster.innerHTML = '<div class="loading-spinner"></div>';
@@ -562,14 +652,14 @@ async function fetchTeamData() {
 
     try {
         const [teamRes, dashRes] = await Promise.all([
-            fetch(`${API_BASE}/api/team/${ownTeamId}`),
+            fetch(`${API_BASE}/api/team/${teamId}`),
             fetch(`${API_BASE}/api/dashboard`)
         ]);
         const teamData = await teamRes.json();
         const dash = await dashRes.json();
 
         document.getElementById('teamNameHeading').textContent =
-            teamData.team?.name || 'Mi Equipo';
+            expandTeamName(teamData.team?.name) || 'Mi Equipo';
         document.getElementById('playerCount').textContent =
             `${teamData.players?.length ?? 0} jugadores`;
 
@@ -620,12 +710,13 @@ function renderPlayerRoster(players) {
         const sl  = s.sets_lost    ?? '-';
         const ranking = p.ranking || s.ranking || 'N/R';
         return `
-        <div class="player-row">
+        <div class="player-row clickable" onclick="openPlayerModal(${p.cta_id})">
             <div class="player-avatar"><i class="ri-user-3-line"></i></div>
             <div class="player-name">${p.name}</div>
             <div class="player-stat-pill">Ranking: <strong>${ranking}</strong></div>
-            <div class="player-stat-pill">Partidos: <strong>${mw}V / ${ml}D</strong></div>
+            <div class="player-stat-pill">Partidos: <strong>${mw}G / ${ml}P</strong></div>
             <div class="player-stat-pill">Sets: <strong>${sw} / ${sl}</strong></div>
+            <div class="player-detail-hint"><i class="ri-arrow-right-s-line"></i></div>
         </div>`;
     }).join('');
 
@@ -633,14 +724,125 @@ function renderPlayerRoster(players) {
 }
 
 // ─────────────────────────────────────────────
+// MODAL: PERFIL DE JUGADOR
+// ─────────────────────────────────────────────
+async function openPlayerModal(ctaId) {
+    const modal = document.getElementById('playerModal');
+    const content = document.getElementById('playerModalContent');
+    content.innerHTML = '<div class="loading-spinner"></div>';
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/player/${ctaId}`);
+        const data = await res.json();
+        content.innerHTML = renderPlayerModal(data);
+    } catch (e) {
+        content.innerHTML = '<p class="text-muted" style="padding:2rem">Error al cargar el jugador.</p>';
+    }
+}
+
+function closePlayerModal(event) {
+    if (event && event.currentTarget === event.target) {
+        document.getElementById('playerModal').classList.remove('active');
+        document.body.style.overflow = '';
+    } else if (!event) {
+        document.getElementById('playerModal').classList.remove('active');
+        document.body.style.overflow = '';
+    }
+}
+
+function renderPlayerModal(data) {
+    const p = data.player || {};
+    const s = data.stats || {};
+    const team = data.team || {};
+    const history = data.match_history || [];
+
+    const ranking = s.ranking || 'N/R';
+    const mw = s.matches_won ?? '-';
+    const ml = s.matches_lost ?? '-';
+    const total = (s.matches_won || 0) + (s.matches_lost || 0);
+    const winPct = total > 0 ? Math.round((s.matches_won / total) * 100) : null;
+    const sw = s.sets_won ?? '-';
+    const sl = s.sets_lost ?? '-';
+
+    const teamName = expandTeamName(team.name) || team.name || '—';
+    const cat = team.categoria_name || '';
+
+    const historyRows = history.length > 0 ? history.map(h => {
+        const resClass = h.result === 'W' ? 'win' : h.result === 'L' ? 'loss' : '';
+        const resLabel = h.result === 'W' ? 'G' : h.result === 'L' ? 'P' : h.result || '?';
+        return `
+        <div class="history-row">
+            <span class="history-date">${h.match_date || '—'}</span>
+            <span class="history-vs">vs</span>
+            <span class="history-opponent">${h.opponent_name || '—'}</span>
+            <span class="history-score">${h.score || '—'}</span>
+            <span class="history-result ${resClass}">${resLabel}</span>
+        </div>`;
+    }).join('') : '<p class="text-muted" style="padding:.5rem 0">Sin historial disponible. Ejecuta un Crawl para obtener datos.</p>';
+
+    return `
+    <div class="modal-player-header">
+        <div class="modal-avatar"><i class="ri-user-3-line"></i></div>
+        <div>
+            <h2 class="modal-player-name">${p.name || 'Jugador'}</h2>
+            <p class="modal-player-sub">${teamName}${cat ? ' · ' + cat : ''}</p>
+        </div>
+    </div>
+
+    <div class="modal-stats-grid">
+        <div class="modal-stat">
+            <span class="modal-stat-value">${ranking}</span>
+            <span class="modal-stat-label">Ranking</span>
+        </div>
+        <div class="modal-stat">
+            <span class="modal-stat-value">${mw}G / ${ml}P${winPct !== null ? ` <small>(${winPct}%)</small>` : ''}</span>
+            <span class="modal-stat-label">Partidos</span>
+        </div>
+        <div class="modal-stat">
+            <span class="modal-stat-value">${sw} / ${sl}</span>
+            <span class="modal-stat-label">Sets G/P</span>
+        </div>
+    </div>
+
+    <div class="modal-history-section">
+        <h4 class="modal-section-title"><i class="ri-history-line"></i> Historial Reciente</h4>
+        <div class="modal-history-list">${historyRows}</div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
 // VISTA: POSICIONES
 // ─────────────────────────────────────────────
-async function fetchStandings() {
+function initCategoryTabs() {
+    const tabs = document.querySelectorAll('#categoryTabs .cat-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const cat = tab.dataset.cat || null;
+            const sub = document.getElementById('posicionesSubtitle');
+            if (sub) {
+                sub.textContent = cat
+                    ? `Liga 32 · Categoría ${cat} · Temporada Actual`
+                    : 'Liga 32 · Todas las Categorías · Temporada Actual';
+            }
+            fetchStandings(cat);
+        });
+    });
+}
+
+async function fetchStandings(categoria = null) {
     const container = document.getElementById('standingsTable');
     container.innerHTML = '<div class="loading-spinner"></div>';
 
+    const url = categoria
+        ? `${API_BASE}/api/standings?categoria=${encodeURIComponent(categoria)}`
+        : `${API_BASE}/api/standings`;
+
     try {
-        const res = await fetch(`${API_BASE}/api/standings`);
+        const res = await fetch(url);
         const data = await res.json();
         const standings = data.standings || [];
 
@@ -650,15 +852,17 @@ async function fetchStandings() {
             return;
         }
 
-        const ownTeamId = 7361;
+        const showCat = !categoria;
 
         const rows = standings.map((s, i) => {
-            const isOwn = s.team_cta_id === ownTeamId;
+            const isOwn = s.team_cta_id === (ownTeamId || 7361);
+            const catBadge = showCat && s.categoria_name
+                ? `<span class="cat-badge cat-${s.categoria_name}">${s.categoria_name}</span>` : '';
             return `
             <tr class="${isOwn ? 'own-team' : ''}">
                 <td class="pos-cell">${s.position ?? (i + 1)}</td>
                 <td class="team-cell">
-                    ${s.team_name || '?'}
+                    ${catBadge}${expandTeamName(s.team_name) || '?'}
                     ${isOwn ? '<span class="own-badge">TÚ</span>' : ''}
                 </td>
                 <td>${s.played    ?? '-'}</td>
@@ -713,7 +917,7 @@ async function fetchRivalTeams() {
         rivals.forEach(t => {
             const opt = document.createElement('option');
             opt.value = t.cta_id;
-            opt.textContent = t.name;
+            opt.textContent = expandTeamName(t.name);
             select.appendChild(opt);
         });
 
@@ -736,7 +940,7 @@ async function runFullPredictor() {
         return;
     }
 
-    const rivalName = select.options[select.selectedIndex].text;
+    const rivalName = expandTeamName(select.options[select.selectedIndex].text);
     content.innerHTML = `
         <div style="text-align:center;padding:2rem">
             <div class="loading-spinner" style="margin:0 auto 1rem"></div>

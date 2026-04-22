@@ -38,7 +38,7 @@
                 <div class="avatar"><i class="ri-user-smile-line"></i></div>
                 <div class="user-info">
                     <span class="user-name" id="userNameLabel">Cargando...</span>
-                    <span class="user-role">Liga 32 / Cat 6</span>
+                    <span class="user-role" id="userRoleLabel">Liga 32 / Cat 6</span>
                 </div>
             </div>
         </aside>
@@ -80,7 +80,7 @@
                             </div>
                             <h3 class="kpi-value" id="valPosition">#--</h3>
                             <div class="kpi-footer">
-                                <span class="trend positive"><i class="ri-arrow-up-line"></i> Zona Alta</span>
+                                <span class="trend positive" id="trendPosition"><i class="ri-arrow-up-line"></i> Zona Alta</span>
                             </div>
                         </div>
 
@@ -144,7 +144,7 @@
                                 <div class="page-icon purple"><i class="ri-group-fill"></i></div>
                                 <div>
                                     <h2 id="teamNameHeading">Mi Equipo</h2>
-                                    <p class="page-subtitle">Liga 32 · Categoría 6</p>
+                                    <p class="page-subtitle" id="equipoSubtitle">Liga 32 · Categoría 6</p>
                                 </div>
                             </div>
                             <div class="team-quick-stats" id="teamQuickStats">
@@ -178,7 +178,7 @@
                                 <div class="page-icon green"><i class="ri-trophy-fill"></i></div>
                                 <div>
                                     <h2>Tabla de Posiciones</h2>
-                                    <p class="page-subtitle">Liga 32 · Categoría 6 · Temporada Actual</p>
+                                    <p class="page-subtitle" id="posicionesSubtitle">Liga 32 · Categoría 6 · Temporada Actual</p>
                                 </div>
                             </div>
                             <span class="sync-badge" id="standingsLastSync">--</span>
@@ -187,6 +187,21 @@
 
                     <section class="full-width-section">
                         <div class="glass-panel">
+                            <div class="category-tabs-wrap">
+                                <div id="categoryTabs" class="category-tabs">
+                                    <button class="cat-tab active" data-cat="">Todas</button>
+                                    <button class="cat-tab" data-cat="3F">3F</button>
+                                    <button class="cat-tab" data-cat="3M">3M</button>
+                                    <button class="cat-tab" data-cat="4F">4F</button>
+                                    <button class="cat-tab" data-cat="4M">4M</button>
+                                    <button class="cat-tab" data-cat="5F">5F</button>
+                                    <button class="cat-tab" data-cat="5M">5M</button>
+                                    <button class="cat-tab" data-cat="6F">6F</button>
+                                    <button class="cat-tab" data-cat="6M">6M</button>
+                                    <button class="cat-tab" data-cat="7F">7F</button>
+                                    <button class="cat-tab" data-cat="7M">7M</button>
+                                </div>
+                            </div>
                             <div id="standingsTable" class="standings-table-wrap">
                                 <div class="loading-spinner"></div>
                             </div>
@@ -235,6 +250,30 @@
             </div><!-- /view-predictor -->
 
         </main>
+    </div>
+
+    <!-- ═══════ PANEL: LOG EN VIVO ═══════ -->
+    <div id="logPanel" class="log-panel">
+        <div class="log-panel-header">
+            <div class="log-panel-title">
+                <i class="ri-terminal-box-line"></i>
+                <span id="logPanelTitle">Log en vivo</span>
+            </div>
+            <div class="log-panel-actions">
+                <span id="logPanelStatus" class="log-status"></span>
+                <button class="icon-btn log-clear-btn" onclick="clearLog()" title="Limpiar"><i class="ri-delete-bin-line"></i></button>
+                <button class="icon-btn log-close-btn" onclick="closeLogPanel()" title="Cerrar"><i class="ri-arrow-down-s-line"></i></button>
+            </div>
+        </div>
+        <div id="logOutput" class="log-output"></div>
+    </div>
+
+    <!-- ═══════ MODAL: PERFIL DE JUGADOR ═══════ -->
+    <div id="playerModal" class="modal-overlay" onclick="closePlayerModal(event)">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closePlayerModal()"><i class="ri-close-line"></i></button>
+            <div id="playerModalContent"><div class="loading-spinner"></div></div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

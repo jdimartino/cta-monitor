@@ -69,7 +69,7 @@ def crawl(full):
         click.echo("Error: No se pudo autenticar. Verifica las credenciales en .env")
         sys.exit(1)
 
-    result = spider.discover_all(session, incremental=not full)
+    result = spider.discover_all(session, incremental=not full, max_pages=None if full else config.MAX_PAGES_PER_CRAWL)
     click.echo(f"\nResumen del crawl:")
     click.echo(f"  Equipos encontrados: {result.get('teams_found', 0)}")
     click.echo(f"  Jugadores encontrados: {result.get('players_found', 0)}")
@@ -88,6 +88,28 @@ def monitor_cmd(force, loop):
         monitor.run_monitor(interval_seconds=loop)
     else:
         monitor.monitor_cycle(force_notify=force)
+
+
+@cli.command("player")
+@click.argument("player_id", type=int)
+def crawl_player_cmd(player_id):
+    """Crawl un jugador individual por su CTA ID."""
+    import spider
+    import auth
+
+    session = auth.get_session()
+    if not session:
+        click.echo("Error: No se pudo autenticar.")
+        sys.exit(1)
+
+    click.echo(f"[Player] Scrapeando jugador {player_id}...")
+    data = spider.crawl_player(session, player_id)
+    click.echo(f"  Nombre: {data.get('name', '?')}")
+    click.echo(f"  Ranking: {data.get('ranking', 'N/R')}")
+    click.echo(f"  Partidos: {data.get('matches_won', '-')}V / {data.get('matches_lost', '-')}D")
+    click.echo(f"  Sets: {data.get('sets_won', '-')} / {data.get('sets_lost', '-')}")
+    click.echo(f"  Juegos: {data.get('games_won', '-')} / {data.get('games_lost', '-')}")
+    click.echo(f"  Historial: {len(data.get('match_history', []))} partidos")
 
 
 @cli.command()

@@ -206,7 +206,8 @@ def parse_team_page(html: str) -> dict:
                 "lost":      _num(vals[3]) if len(vals) > 3 else None,
                 "sets_won":  _num(vals[5]) if len(vals) > 5 else None,
                 "sets_lost": _num(vals[6]) if len(vals) > 6 else None,
-                "games_won": _num(vals[8]) if len(vals) > 8 else None,
+                "games_won":  _num(vals[8]) if len(vals) > 8 else None,
+                "games_lost": _num(vals[9]) if len(vals) > 9 else None,
             })
 
     # ── Table 1: Fixtures ──
@@ -304,10 +305,11 @@ def parse_player_page(html: str) -> dict:
 
     Returns:
         {name, ranking, matches_won, matches_lost, sets_won, sets_lost,
-         games_won, games_lost, raw_data: {all key-value pairs}}
+         games_won, games_lost, raw_data: {all key-value pairs},
+         match_history: [{date, opponent_name, opponent_cta_id, result, score, rubber_type}]}
     """
     soup = BeautifulSoup(html, "html.parser")
-    result = {"raw_data": {}}
+    result = {"raw_data": {}, "match_history": []}
 
     # Player name
     nombre = soup.find("h1") or soup.find("h2") or soup.find("h3")
@@ -323,26 +325,129 @@ def parse_player_page(html: str) -> dict:
             if key:
                 result["raw_data"][key] = val
 
-                # Map known keys to structured fields
                 key_lower = key.lower()
                 if "ranking" in key_lower:
                     result["ranking"] = val
-                elif "ganados" in key_lower or "victorias" in key_lower:
+                elif "partido" in key_lower and ("ganado" in key_lower or "victoria" in key_lower):
                     try:
                         result["matches_won"] = int(val)
                     except ValueError:
                         pass
-                elif "perdidos" in key_lower or "derrotas" in key_lower:
+                elif "partido" in key_lower and ("perdido" in key_lower or "derrota" in key_lower):
                     try:
                         result["matches_lost"] = int(val)
                     except ValueError:
                         pass
+                elif ("ganado" in key_lower or "victoria" in key_lower) and "set" not in key_lower and "juego" not in key_lower:
+                    try:
+                        result["matches_won"] = int(val)
+                    except ValueError:
+                        pass
+                elif ("perdido" in key_lower or "derrota" in key_lower) and "set" not in key_lower and "juego" not in key_lower:
+                    try:
+                        result["matches_lost"] = int(val)
+                    except ValueError:
+                        pass
+                elif "set" in key_lower and ("ganado" in key_lower or "won" in key_lower):
+                    try:
+                        result["sets_won"] = int(val)
+                    except ValueError:
+                        pass
+                elif "set" in key_lower and ("perdido" in key_lower or "lost" in key_lower):
+                    try:
+                        result["sets_lost"] = int(val)
+                    except ValueError:
+                        pass
+                elif "juego" in key_lower and ("ganado" in key_lower or "won" in key_lower):
+                    try:
+                        result["games_won"] = int(val)
+                    except ValueError:
+                        pass
+                elif "juego" in key_lower and ("perdido" in key_lower or "lost" in key_lower):
+                    try:
+                        result["games_lost"] = int(val)
+                    except ValueError:
+                        pass
 
-    # Look for stats in spans/divs
+    # Look for stats in spans/divs — also extract ranking from "Rank1376,59" pattern
     for tag in soup.find_all(["span", "div", "p"]):
         texto = tag.get_text(strip=True)
         if any(k in texto.lower() for k in ["ranking", "puntos", "ganados", "perdidos", "sets"]):
             result["raw_data"][f"info_{len(result['raw_data'])}"] = texto
+        # ctatenis.com displays ranking as "Rank1376,59" or "Rank 1376,59"
+        if "ranking" not in result and "rank" in texto.lower():
+            rm = re.search(r"[Rr]ank\s*([\d]+[,.][\d]+)", texto)
+            if rm:
+                result["ranking"] = rm.group(1).replace(",", ".")
+
+    # Parse match history — ctatenis uses: Temp.|Cat.|Club|Jor.|D/S|Compañero|Oponente|vs Club|Score|Ranking
+    history_keywords = {"fecha", "rival", "resultado", "marcador", "score", "oponente",
+                        "temp", "jor", "compañero", "companion"}
+    for table in soup.find_all("table"):
+        header_row = table.find("tr")
+        if not header_row:
+            continue
+        header_cells = header_row.find_all(["th", "td"])
+        headers = [c.get_text(strip=True).lower() for c in header_cells]
+        # Check ALL headers, not just first 6
+        if not any(any(kw in h for kw in history_keywords) for h in headers):
+            continue
+
+        # Map column positions
+        col_map = {}
+        for i, h in enumerate(headers):
+            if "fecha" in h or "temp" in h:
+                col_map["date"] = i
+            if "rival" in h or "oponente" in h:
+                col_map["opponent"] = i
+            if "resultado" in h:
+                col_map["result"] = i
+            if "score" in h or "marcador" in h:
+                col_map["score"] = i
+            if "d/s" in h or "tipo" in h:
+                col_map["rubber_type"] = i
+            if "compañero" in h or "companion" in h or "pareja" in h:
+                col_map["partner"] = i
+            if "club" in h and "vs" in h:
+                col_map["vs_club"] = i
+
+        for row in table.find_all("tr")[1:]:
+            cols = row.find_all(["td", "th"])
+            if len(cols) < 3:
+                continue
+            entry = {}
+
+            if "date" in col_map and col_map["date"] < len(cols):
+                entry["match_date"] = cols[col_map["date"]].get_text(strip=True)
+            if "opponent" in col_map and col_map["opponent"] < len(cols):
+                opp_cell = cols[col_map["opponent"]]
+                entry["opponent_name"] = opp_cell.get_text(strip=True)
+                link = opp_cell.find("a", href=re.compile(r"/cts/profile/(\d+)/"))
+                if link:
+                    m = re.search(r"/cts/profile/(\d+)/", link["href"])
+                    if m:
+                        entry["opponent_cta_id"] = int(m.group(1))
+            if "partner" in col_map and col_map["partner"] < len(cols):
+                entry["partner_name"] = cols[col_map["partner"]].get_text(strip=True)
+            if "rubber_type" in col_map and col_map["rubber_type"] < len(cols):
+                rt = cols[col_map["rubber_type"]].get_text(strip=True).upper()
+                entry["rubber_type"] = "doubles" if rt == "D" else "singles"
+            if "score" in col_map and col_map["score"] < len(cols):
+                raw_score = cols[col_map["score"]].get_text(strip=True)
+                # Score cell may embed result: "L 0-6 2-6" or "W 6-1 7-6"
+                sm = re.match(r"^([WLwl])\s+(.+)$", raw_score)
+                if sm:
+                    entry["result"] = sm.group(1).upper()
+                    entry["score"] = sm.group(2)
+                else:
+                    entry["score"] = raw_score
+            if "result" in col_map and col_map["result"] < len(cols) and "result" not in entry:
+                raw_result = cols[col_map["result"]].get_text(strip=True).upper()
+                entry["result"] = "W" if raw_result in ("W", "G", "V") else "L" if raw_result in ("L", "P", "D") else raw_result
+
+            if entry.get("opponent_name") or entry.get("score"):
+                result["match_history"].append(entry)
+        break  # only parse first matching table
 
     return result
 
@@ -376,8 +481,15 @@ def crawl_standings(session, liga_id: int = None, cat_id: int = None) -> list[di
 
     teams = parse_standings_page(html)
 
-    # Ensure league exists
-    league_id = database.upsert_league(liga_id, cat_id, f"Liga {liga_id} Cat {cat_id}")
+    # Ensure league exists — look up gender/level from CATEGORIES
+    cat_info = next((c for c in config.CATEGORIES if c["id"] == cat_id), None)
+    league_id = database.upsert_league(
+        liga_id, cat_id,
+        name=cat_info["name"] if cat_info else f"Liga {liga_id} Cat {cat_id}",
+        gender=cat_info["gender"] if cat_info else None,
+        level=cat_info["level"] if cat_info else None,
+        categoria_name=cat_info["name"] if cat_info else None,
+    )
 
     # Upsert teams and standings
     for team_data in teams:
@@ -475,19 +587,23 @@ def crawl_player(session, player_cta_id: int) -> dict:
 
     data = parse_player_page(html)
 
-    # Update player name if found
+    # Update player name only if it's a real name (not a generic page title)
+    _GENERIC_NAMES = {"perfil de afiliado", "perfil", "jugador", "player profile"}
     player = database.get_player(player_cta_id)
-    if player and data.get("name"):
-        database.upsert_player(player_cta_id, data["name"], player.get("team_id"))
+    scraped_name = data.get("name", "").strip()
+    if player and scraped_name and scraped_name.lower() not in _GENERIC_NAMES:
+        database.upsert_player(player_cta_id, scraped_name, player.get("team_id"))
 
     # Insert stats snapshot
     if player:
         database.insert_player_stats(player["id"], data)
+        if data.get("match_history"):
+            database.upsert_player_match_history(player["id"], data["match_history"])
 
     return data
 
 
-def discover_all(session=None, incremental: bool = True) -> dict:
+def discover_all(session=None, incremental: bool = True, max_pages: int = None) -> dict:
     """Full crawl pipeline: standings → teams → players.
 
     Args:
@@ -505,12 +621,21 @@ def discover_all(session=None, incremental: bool = True) -> dict:
     database.init_db()
     summary = {"teams_found": 0, "players_found": 0, "pages_scraped": 0}
     pages_scraped = 0
+    page_limit = max_pages if max_pages is not None else config.MAX_PAGES_PER_CRAWL
 
-    # Step 1: Crawl standings
-    print("[Spider] Paso 1: Tabla de posiciones...")
-    teams = crawl_standings(session)
+    # Step 1: Crawl standings for ALL categories
+    print(f"[Spider] Paso 1: Tablas de posiciones ({len(config.CATEGORIES)} categorías)...")
+    all_teams = []
+    for cat in config.CATEGORIES:
+        if page_limit and pages_scraped >= page_limit:
+            break
+        print(f"  [{cat['name']}] categoria_id={cat['id']}")
+        teams_in_cat = crawl_standings(session, config.LIGA_ID, cat["id"])
+        all_teams.extend(teams_in_cat)
+        pages_scraped += 1
+
+    teams = all_teams
     summary["teams_found"] = len(teams)
-    pages_scraped += 1
 
     # Step 2: Crawl each team
     print(f"[Spider] Paso 2: Crawling {len(teams)} equipos...")
@@ -520,8 +645,8 @@ def discover_all(session=None, incremental: bool = True) -> dict:
         if not cta_id:
             continue
 
-        if pages_scraped >= config.MAX_PAGES_PER_CRAWL:
-            logger.warning(f"Reached max pages limit ({config.MAX_PAGES_PER_CRAWL})")
+        if page_limit and pages_scraped >= page_limit:
+            logger.warning(f"Reached max pages limit ({page_limit})")
             break
 
         # Incremental check
@@ -544,8 +669,8 @@ def discover_all(session=None, incremental: bool = True) -> dict:
     # Step 3: Crawl each player
     print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores...")
     for player in all_players:
-        if pages_scraped >= config.MAX_PAGES_PER_CRAWL:
-            logger.warning(f"Reached max pages limit ({config.MAX_PAGES_PER_CRAWL})")
+        if page_limit and pages_scraped >= page_limit:
+            logger.warning(f"Reached max pages limit ({page_limit})")
             break
 
         crawl_player(session, player["cta_id"])
@@ -612,7 +737,8 @@ def parse_group_page(html: str) -> dict:
                 "p_ave":     _float(vals[4]) if len(vals) > 4 else None,
                 "sets_won":  _num(vals[5]) if len(vals) > 5 else None,
                 "sets_lost": _num(vals[6]) if len(vals) > 6 else None,
-                "games_won": _num(vals[8]) if len(vals) > 8 else None,
+                "games_won":  _num(vals[8]) if len(vals) > 8 else None,
+                "games_lost": _num(vals[9]) if len(vals) > 9 else None,
             })
 
     # ── Tabla 1: Calendario ──
