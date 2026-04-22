@@ -1035,45 +1035,6 @@ async function fetchTeamRankings(categoria = null) {
             return;
         }
 
-        // TOP 3 — Podium
-        const top3 = standings.slice(0, 3);
-        let podiumHtml = '<div class="podium-container">';
-        const podiumOrder = [1, 0, 2];
-        podiumOrder.forEach((idx) => {
-            if (!top3[idx]) return;
-            const s = top3[idx];
-            const pos = idx + 1;
-            const isOwn = s.team_cta_id === (ownTeamId || 7361);
-            const medals = ['🥇', '🥈', '🥉'];
-            const heightClasses = ['podium-1st', 'podium-2nd', 'podium-3rd'];
-            const teamFullName = expandTeamName(s.team_name);
-            const winRate = s.played > 0 ? Math.round((s.won / s.played) * 100) : 0;
-
-            podiumHtml += `
-            <div class="podium-card ${heightClasses[idx]} ${isOwn ? 'own-team-podium' : ''}">
-                <div class="podium-medal">${medals[idx]}</div>
-                <div class="podium-rank">#${pos}</div>
-                <div class="podium-team-name" title="${teamFullName}">${teamFullName}</div>
-                ${s.categoria_name ? `<div class="podium-category">${s.categoria_name}</div>` : ''}
-                <div class="podium-stats">
-                    <div class="podium-stat">
-                        <span class="stat-value">${s.points || 0}</span>
-                        <span class="stat-label">pts</span>
-                    </div>
-                    <div class="podium-stat">
-                        <span class="stat-value">${s.won || 0}-${s.lost || 0}</span>
-                        <span class="stat-label">W-L</span>
-                    </div>
-                    <div class="podium-stat">
-                        <span class="stat-value">${winRate}%</span>
-                        <span class="stat-label">%V</span>
-                    </div>
-                </div>
-                ${isOwn ? '<div class="own-badge-podium">TU EQUIPO</div>' : ''}
-            </div>`;
-        });
-        podiumHtml += '</div>';
-
         // Tabla completa
         const showCat = !categoria;
         const rows = standings.map((s, i) => {
@@ -1101,7 +1062,6 @@ async function fetchTeamRankings(categoria = null) {
 
         container.innerHTML = `
         <div class="classification-wrapper">
-            ${podiumHtml}
             <div class="table-section">
                 <div class="table-header-actions">
                     <h3 style="margin: 0;">Tabla Completa</h3>
