@@ -201,16 +201,20 @@ def sync():
     click.echo(f"[Sync] Actualizando equipo propio ({config.OWN_TEAM_ID})...")
     spider.crawl_single_team(config.OWN_TEAM_ID, session)
 
-    # Crawl group page (standings + fixtures for our group)
-    click.echo(f"[Sync] Actualizando grupo {config.GROUP_ID}...")
-    spider.crawl_group(config.GROUP_ID, session)
+    # Crawl all groups for own category
+    own_groups = config.GROUPS.get(config.CATEGORIA_ID, [])
+    league = database.get_league(config.LIGA_ID, config.CATEGORIA_ID)
+    league_id = league["id"] if league else None
+    for grupo_num, group_id in own_groups:
+        click.echo(f"[Sync] Actualizando grupo {group_id} (Grupo {grupo_num})...")
+        spider.crawl_group(group_id, session, league_id=league_id, grupo_num=grupo_num)
 
     click.echo("[Sync] Completado.")
 
 
 @cli.command()
 def group():
-    """Crawl solo la pagina del grupo (posiciones + fixture)."""
+    """Crawl todos los grupos de la liga (posiciones + fixture por grupo)."""
     import spider
     import auth
 
@@ -219,10 +223,36 @@ def group():
         click.echo("Error: No se pudo autenticar.")
         sys.exit(1)
 
-    click.echo(f"[Group] Scrapeando grupo {config.GROUP_ID}...")
-    result = spider.crawl_group(config.GROUP_ID, session)
-    click.echo(f"[Group] Posiciones guardadas: {result.get('standings', 0)}")
-    click.echo(f"[Group] Partidos guardados:   {result.get('fixtures', 0)}")
+    total_standings = 0
+    total_fixtures  = 0
+
+    for cat in config.CATEGORIES:
+        cat_id   = cat["id"]
+        cat_name = cat["name"]
+        groups   = config.GROUPS.get(cat_id, [])
+        if not groups:
+            continue
+
+        # Obtener o crear la league en la BD
+        league = database.get_league(config.LIGA_ID, cat_id)
+        if not league:
+            league_id = database.upsert_league(
+                config.LIGA_ID, cat_id,
+                name=cat_name, gender=cat.get("gender"),
+                level=cat.get("level"), categoria_name=cat_name,
+            )
+        else:
+            league_id = league["id"]
+
+        for grupo_num, group_id in groups:
+            click.echo(f"[Group] {cat_name} Grupo {grupo_num} (id={group_id})...")
+            result = spider.crawl_group(group_id, session, league_id=league_id, grupo_num=grupo_num)
+            total_standings += result.get("standings", 0)
+            total_fixtures  += result.get("fixtures", 0)
+            click.echo(f"         → {result.get('group_name','?')}: {result.get('standings',0)} pos / {result.get('fixtures',0)} fix")
+
+    click.echo(f"\n[Group] Total posiciones: {total_standings}")
+    click.echo(f"[Group] Total partidos:   {total_fixtures}")
     click.echo("[Group] Completado.")
 
 

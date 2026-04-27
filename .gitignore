@@ -21,3 +21,19 @@ venv/
 
 # OS
 .DS_Store
+
+# Logs
+*.log
+server.log
+
+# Backups
+*.bak.*
+
+# Temp/Sample files
+sample_*.html
+temp_*.html
+test_*.html
+test_api.py
+test_rank.py
+test_regex.py
+fetch_test.py

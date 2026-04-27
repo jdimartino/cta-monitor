@@ -1,0 +1,12 @@
+{
+  "name": "cta-monitor",
+  "version": "1.0.0",
+  "description": "CTA Tenis Monitor API & Frontend",
+  "main": "api.py",
+  "scripts": {
+    "start": "bash serve.sh",
+    "dev": "bash serve.sh"
+  },
+  "author": "JDM",
+  "license": "ISC"
+}

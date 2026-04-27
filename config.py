@@ -42,7 +42,22 @@ MAX_PAGES_PER_CRAWL = int(os.getenv("MAX_PAGES_PER_CRAWL", "500"))
 OWN_TEAM_ID  = int(os.getenv("OWN_TEAM_ID",  "7361"))
 LIGA_ID      = int(os.getenv("LIGA_ID",      "32"))
 CATEGORIA_ID = int(os.getenv("CATEGORIA_ID", "6"))
-GROUP_ID     = int(os.getenv("GROUP_ID",     "1282"))  # Grupo 5, Liga 32 Cat 6
+GROUP_ID     = int(os.getenv("GROUP_ID",     "1282"))  # Alias de compatibilidad — Grupo 5M del equipo propio
+
+# Todos los grupos de la liga. Clave = categoria_id de ctatenis.
+# Valor = lista de (grupo_num, group_id) en orden.
+GROUPS: dict[int, list[tuple[str, int]]] = {
+    9:  [("1", 1248)],                                                        # 3F
+    1:  [("1", 1249)],                                                        # 3M
+    2:  [("1", 1250), ("2", 1251)],                                           # 4F
+    7:  [("1", 1252), ("2", 1253)],                                           # 4M
+    4:  [("1", 1269), ("2", 1270), ("3", 1271)],                              # 5F
+    5:  [("1", 1272), ("2", 1273), ("3", 1274)],                              # 5M
+    3:  [("1", 1275), ("2", 1276), ("3", 1277)],                              # 6F
+    6:  [("1", 1278), ("2", 1279), ("3", 1280), ("4", 1281), ("5", 1282)],   # 6M
+    35: [("1", 1254), ("2", 1255)],                                           # 7F
+    36: [("1", 1256), ("2", 1257)],                                           # 7M
+}
 
 # ── Todas las categorías de la liga (liga_id=32) ──
 CATEGORIES = [

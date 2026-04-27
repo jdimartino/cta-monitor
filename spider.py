@@ -1297,6 +1297,10 @@ def crawl_group(group_id: int, session=None, league_id: int = None, grupo_num: s
     url = f"{config.BASE_URL}/cts/grupo_d/{group_id}/"
     logger.info(f"[Group] Crawling {url}")
     resp = auth.authenticated_get(session, url)
+    if not resp:
+        logger.error(f"[Group] Failed to fetch group page: {url}")
+        return {"error": "Failed to fetch group page"}
+
     soup_tmp = BeautifulSoup(resp.text, "html.parser")
 
     # Extraer nombre del grupo desde <h4> (ej: "Grupo: 6M5" → "6M5")

@@ -20,17 +20,17 @@
             </div>
 
             <nav class="nav-menu">
-                <a href="#" class="nav-item active" data-view="inicio">
-                    <i class="ri-dashboard-line"></i> <span>Inicio</span>
+                <a href="#" class="nav-item active" data-view="posiciones">
+                    <i class="ri-trophy-line"></i> <span>Posiciones</span>
                 </a>
                 <a href="#" class="nav-item" data-view="equipo">
                     <i class="ri-group-line"></i> <span>Mi Equipo</span>
                 </a>
-                <a href="#" class="nav-item" data-view="posiciones">
-                    <i class="ri-trophy-line"></i> <span>Posiciones</span>
-                </a>
                 <a href="#" class="nav-item" data-view="predictor">
                     <i class="ri-magic-line"></i> <span>Predictor de Draw</span>
+                </a>
+                <a href="#" class="nav-item" data-view="refuerzos">
+                    <i class="ri-star-line"></i> <span>Refuerzos</span>
                 </a>
             </nav>
 
@@ -48,6 +48,9 @@
 
             <!-- Topbar -->
             <header class="topbar">
+                <button class="icon-btn hamburger-btn" id="hamburgerBtn" onclick="toggleSidebar()">
+                    <i class="ri-menu-line"></i>
+                </button>
                 <div class="search-bar" id="searchBar">
                     <i class="ri-search-line"></i>
                     <input type="text" placeholder="Buscar equipos, jugadores..." id="searchInput" autocomplete="off">
@@ -66,73 +69,6 @@
                     </button>
                 </div>
             </header>
-
-            <!-- ─────────── VISTA: INICIO ─────────── -->
-            <div id="view-inicio" class="view-section active">
-                <div class="content-grid">
-
-                    <!-- KPIs -->
-                    <section class="kpi-section">
-                        <div class="kpi-card glass-panel">
-                            <div class="kpi-header">
-                                <span class="kpi-title">Posición en Liga</span>
-                                <div class="kpi-icon blue"><i class="ri-bar-chart-grouped-line"></i></div>
-                            </div>
-                            <h3 class="kpi-value" id="valPosition">#--</h3>
-                            <div class="kpi-footer">
-                                <span class="trend positive" id="trendPosition"><i class="ri-arrow-up-line"></i> Zona Alta</span>
-                            </div>
-                        </div>
-
-                        <div class="kpi-card glass-panel">
-                            <div class="kpi-header">
-                                <span class="kpi-title">Puntos Totales</span>
-                                <div class="kpi-icon green"><i class="ri-medal-fill"></i></div>
-                            </div>
-                            <h3 class="kpi-value" id="valPoints">--</h3>
-                            <div class="kpi-footer">
-                                <span class="trend neutral">Acumulando</span>
-                            </div>
-                        </div>
-
-                        <div class="kpi-card glass-panel">
-                            <div class="kpi-header">
-                                <span class="kpi-title">% de Victorias</span>
-                                <div class="kpi-icon purple"><i class="ri-focus-2-line"></i></div>
-                            </div>
-                            <h3 class="kpi-value" id="valWinRate">--%</h3>
-                            <div class="kpi-footer">
-                                <span class="trend neutral" id="valMatchesPlayed">0 Partidos Jugados</span>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- Gráfico + Partidos recientes -->
-                    <section class="middle-section">
-                        <div class="chart-container glass-panel">
-                            <div class="panel-header">
-                                <h3>Tendencia de Rendimiento</h3>
-                                <select class="minimal-select"><option>Esta Temporada</option></select>
-                            </div>
-                            <div class="canvas-wrapper">
-                                <canvas id="performanceChart"></canvas>
-                            </div>
-                        </div>
-
-                        <div class="recent-matches glass-panel">
-                            <div class="panel-header">
-                                <h3>Últimos Partidos</h3>
-                                <a href="#" class="view-all" onclick="navigateTo('posiciones'); return false;">Ver Todos</a>
-                            </div>
-                            <div class="matches-list" id="matchesList">
-                                <div class="loading-spinner"></div>
-                            </div>
-                        </div>
-                    </section>
-
-
-                </div>
-            </div><!-- /view-inicio -->
 
             <!-- ─────────── VISTA: MI EQUIPO ─────────── -->
             <div id="view-equipo" class="view-section">
@@ -154,6 +90,10 @@
                     </section>
 
                     <section class="full-width-section">
+                        <div id="teamMetaCard"></div>
+                    </section>
+
+                    <section class="full-width-section">
                         <div class="glass-panel">
                             <div class="panel-header">
                                 <h3>Nómina de Jugadores</h3>
@@ -169,7 +109,7 @@
             </div><!-- /view-equipo -->
 
             <!-- ─────────── VISTA: POSICIONES ─────────── -->
-            <div id="view-posiciones" class="view-section">
+            <div id="view-posiciones" class="view-section active">
                 <div class="content-grid">
 
                     <section class="page-header-section">
@@ -202,6 +142,9 @@
                                     <button class="cat-tab" data-cat="7M">7M</button>
                                 </div>
                             </div>
+                            <div id="groupTabs" class="group-tabs-wrap" style="display:none;">
+                                <div id="groupTabsList" class="group-tabs"></div>
+                            </div>
                             <div id="standingsTable" class="standings-table-wrap">
                                 <div class="loading-spinner"></div>
                             </div>
@@ -210,6 +153,54 @@
 
                 </div>
             </div><!-- /view-posiciones -->
+
+            <!-- ─────────── VISTA: DETALLE DE EQUIPO ─────────── -->
+            <div id="view-team-detail" class="view-section">
+                <div class="content-grid">
+
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <button class="back-btn" onclick="navigateTo('posiciones')">
+                                    <i class="ri-arrow-left-line"></i> Posiciones
+                                </button>
+                                <div class="page-icon purple"><i class="ri-shield-user-fill"></i></div>
+                                <div>
+                                    <h2 id="tdTeamName">Equipo</h2>
+                                    <p class="page-subtitle" id="tdTeamSubtitle"></p>
+                                </div>
+                            </div>
+                            <div class="quick-stats-grid team-modal-stats" id="tdQuickStats"></div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div id="tdMetaCard"></div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Nómina de Jugadores</h3>
+                                <span class="badge-count" id="tdPlayerCount"></span>
+                            </div>
+                            <div id="tdRoster" class="player-roster">
+                                <div class="loading-spinner"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section" id="tdMatchesSection" style="display:none;">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Partidos</h3>
+                            </div>
+                            <div id="tdMatches"></div>
+                        </div>
+                    </section>
+
+                </div>
+            </div><!-- /view-team-detail -->
 
             <!-- ─────────── VISTA: PREDICTOR DE DRAW ─────────── -->
             <div id="view-predictor" class="view-section">
@@ -249,6 +240,43 @@
                 </div>
             </div><!-- /view-predictor -->
 
+            <!-- ─────────── VISTA: REFUERZOS ─────────── -->
+            <div id="view-refuerzos" class="view-section">
+                <div class="content-grid">
+
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <div class="page-icon yellow"><i class="ri-star-fill"></i></div>
+                                <div>
+                                    <h2>Refuerzos</h2>
+                                    <p class="page-subtitle">Apariciones de jugadores en equipos distintos al propio</p>
+                                </div>
+                            </div>
+                            <div class="page-header-actions">
+                                <select id="refuerzosCatFilter" class="rival-select">
+                                    <option value="">Todas las categorías</option>
+                                </select>
+                                <button class="secondary-btn" onclick="loadRefuerzos()"><i class="ri-refresh-line"></i> Actualizar</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Apariciones detectadas</h3>
+                                <span class="badge-count" id="refuerzosCount">cargando...</span>
+                            </div>
+                            <div id="refuerzosList" class="refuerzo-list">
+                                <div class="loading-spinner"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div><!-- /view-refuerzos -->
+
         </main>
     </div>
 
@@ -276,6 +304,7 @@
         </div>
     </div>
 
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
     <script src="/static/app.js"></script>
 </body>
 </html>

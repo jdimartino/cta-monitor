@@ -143,13 +143,21 @@ def get_session() -> requests.Session | None:
     return login()
 
 
+def _reset_connection_pool(session: requests.Session):
+    """Close existing connections and mount fresh adapters to recover from SSL drops."""
+    from requests.adapters import HTTPAdapter
+    session.close()
+    session.mount("https://", HTTPAdapter(max_retries=0))
+    session.mount("http://",  HTTPAdapter(max_retries=0))
+
+
 def authenticated_get(
-    session: requests.Session, url: str, max_retries: int = 2
+    session: requests.Session, url: str, max_retries: int = 3
 ) -> requests.Response | None:
-    """GET with auto-retry on session expiry. Respects rate limiting."""
+    """GET with auto-retry on session expiry, HTTP errors, and SSL/connection drops."""
     for attempt in range(max_retries + 1):
         try:
-            resp = session.get(url, timeout=15, allow_redirects=True)
+            resp = session.get(url, timeout=20, allow_redirects=True)
             resp.raise_for_status()
 
             # Check if we got redirected to login
@@ -176,6 +184,15 @@ def authenticated_get(
                 time.sleep(wait)
                 continue
             logger.error(f"HTTP error fetching {url}: {e}")
+            return None
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            if attempt < max_retries:
+                wait = config.REQUEST_DELAY * (3 ** attempt)
+                logger.warning(f"SSL/Connection error (attempt {attempt + 1}/{max_retries}), retrying in {wait:.1f}s: {e}")
+                time.sleep(wait)
+                _reset_connection_pool(session)
+                continue
+            logger.error(f"Error fetching {url}: {e}")
             return None
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")

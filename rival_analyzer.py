@@ -59,6 +59,7 @@ def get_recent_matches(team_cta_id: int, limit: int = 5) -> list[dict]:
                 result = "?"
 
         results.append({
+            "id": m["id"],
             "date": m["match_date"],
             "opponent": opponent,
             "score": f"{own_score}-{opp_score}" if own_score else "pendiente",

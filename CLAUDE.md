@@ -2,45 +2,70 @@
 
 ## Arquitectura de trabajo
 
-**Código fuente en MacBook Air. Base de datos y servidor en Mac Mini.**
+**Todo corre directamente en la Mac Mini.**
 
 | Elemento | Ubicación |
 |----------|-----------|
-| Código fuente | `macbook:~/Desktop/Antigravity/cta-monitor/` |
-| Base de datos | `mac-mini:~/antigravity/cta-monitor/data/cta.db` |
-| Servidor API | `http://192.168.1.5:8000` (corre en Mac Mini) |
-| SSH alias | `ssh mac-mini` |
+| Código fuente | `~/Desktop/antigravity/cta-monitor/` |
+| Base de datos | `~/antigravity/cta-monitor/data/cta.db` |
+| Logs del servidor | `~/antigravity/cta-monitor/logs/` |
+| Servidor API local | `http://localhost:8000` |
+| Servidor API en red | `http://192.168.100.132:8000` |
+| Túnel público | `https://cta.tenistac.site` |
 
-El frontend (`static/app.js`) llama directamente a `http://192.168.1.5:8000/api/...` — la Mac Mini atiende todas las consultas de datos.
+El frontend (`static/app.js`) llama a `http://192.168.100.132:8000/api/...`.
 
 ## Cómo abrir el proyecto
 
-Doble clic en el archivo:
+Doble clic en:
 ```
-~/Desktop/Antigravity/cta-monitor.code-workspace
+~/Desktop/antigravity/cta-monitor.code-workspace
 ```
-VS Code abre la carpeta **local** en el MacBook Air. No requiere conexión SSH.
 
-Para ver el dashboard: instala la extensión **Live Server** en VS Code y abre `static/index.html` con "Open with Live Server".
+Para ver el dashboard: extensión **Live Server** en VS Code → click derecho en `static/index.html` → "Open with Live Server".
 
-## Servidor
+## Servidor FastAPI
 
-El servidor FastAPI arranca automáticamente cuando prende la Mac Mini (`crontab @reboot`).
+El servidor se levanta **manualmente** con el script:
 
-Si necesitas reiniciarlo manualmente:
 ```bash
-ssh mac-mini
-cd ~/antigravity/cta-monitor
-pkill -f "uvicorn api:app"
-nohup python3 -m uvicorn api:app --host 0.0.0.0 --port 8000 >> logs/server.log 2>&1 &
+bash open-server.sh
 ```
 
-Ver logs del servidor:
+Esto mata cualquier instancia anterior en el puerto 8000 y abre una nueva ventana Terminal ejecutando `serve.sh` (que activa el venv y lanza uvicorn).
+
+Ver logs en tiempo real:
 ```bash
-ssh mac-mini "tail -50 ~/antigravity/cta-monitor/logs/server.log"
+tail -f ~/antigravity/cta-monitor/logs/fastapi-error.log
 ```
 
-## Comandos CLI (correr via SSH en la Mac Mini)
+## Túnel Cloudflare
+
+El túnel expone el servidor local en `https://cta.tenistac.site`.
+
+Configuración en `~/.cloudflared/config.yml`:
+- Tunnel: `cta-monitor`
+- Credenciales: `~/.cloudflared/748e7331-cb87-4f1d-9ccd-29bfa6323854.json`
+- Binario: `~/bin/cloudflared`
+
+**Arrancar el túnel:**
+```bash
+bash open-tunnel.sh
+```
+Abre una nueva ventana Terminal con cloudflared corriendo en primer plano.
+
+**Detener el túnel:**
+```bash
+bash stop-tunnel.sh
+```
+
+**Verificar que el túnel está activo:**
+```bash
+pgrep -a cloudflared
+curl https://cta.tenistac.site/api/standings | head -5
+```
+
+## Comandos CLI
 
 ```bash
 python3 main.py group          # Actualizar posiciones + calendario del grupo (~5 seg)
@@ -54,24 +79,29 @@ python3 main.py crawl --full   # Crawl completo: todos los equipos y jugadores (
 - **Frontend**: SPA vanilla JS/CSS en `static/`
 - **Scraping**: BeautifulSoup4 + requests con sesión autenticada
 - **Auth**: ctatenis.com (credenciales en `.env`)
-- **Mac Mini**: macOS 12.7.6, Intel Core i5, IP fija 192.168.1.5
+- **Túnel**: Cloudflare Tunnel (`cloudflared 2026.3.0`)
+- **Mac Mini**: macOS 12.7.6, Intel Core i5, IP fija 192.168.100.132
 
 ## Estructura clave
 
 ```
 cta-monitor/
-├── api.py           # FastAPI — endpoints REST
-├── spider.py        # Scraper — parse_team_page(), crawl_group()
-├── database.py      # SQLite ORM
-├── auth.py          # Sesión autenticada ctatenis.com
-├── config.py        # Variables de entorno y constantes
-├── main.py          # CLI: sync, group, crawl, rival, draw
-├── static/          # Frontend SPA
+├── api.py             # FastAPI — endpoints REST
+├── spider.py          # Scraper — parse_team_page(), crawl_group()
+├── database.py        # SQLite ORM
+├── auth.py            # Sesión autenticada ctatenis.com
+├── config.py          # Variables de entorno y constantes
+├── main.py            # CLI: sync, group, crawl, rival, draw
+├── open-server.sh     # Levanta el servidor FastAPI en nueva ventana Terminal
+├── serve.sh           # Script interno que activa venv y lanza uvicorn
+├── open-tunnel.sh     # Arranca el túnel Cloudflare en nueva ventana Terminal
+├── stop-tunnel.sh     # Detiene el túnel Cloudflare
+├── static/            # Frontend SPA
 │   ├── index.html
 │   ├── app.js
 │   └── style.css
 └── data/
-    └── cta.db       # Base de datos SQLite
+    └── cta.db         # Base de datos SQLite
 ```
 
 ## Notas importantes
@@ -81,23 +111,6 @@ cta-monitor/
 - La sesión de scraping se cachea en `data/session.pkl` (válida 4 horas)
 - Zona horaria del dashboard: America/Caracas (UTC-4)
 
-
-## Setup inicial en MacBook Air M1 (primera vez)
-
-```bash
-# 1. Clonar el repositorio
-cd ~/Desktop/Antigravity
-git clone https://github.com/jdimartino/cta-monitor.git
-```
-
-Eso es todo. No se necesita Python local ni `.env` — el backend corre en la Mac Mini.
-
-**VS Code:**
-1. Abrir `cta-monitor.code-workspace` (doble clic)
-2. Instalar extensión **Live Server** (`ritwickdey.liveserver`)
-3. Click derecho en `static/index.html` → "Open with Live Server"
-4. El dashboard abre en `http://127.0.0.1:5500` y consulta datos desde `192.168.1.5:8000`
-
 ## GitHub Workflow (día a día)
 
 ```bash
@@ -105,10 +118,6 @@ Eso es todo. No se necesita Python local ni `.env` — el backend corre en la Ma
 git add -p                        # revisar cambios
 git commit -m "descripción"
 git push
-
-# En la Mac Mini — actualizar el servidor con los cambios
-ssh mac-mini "cd ~/antigravity/cta-monitor && git pull"
 ```
 
 **Archivos excluidos de git** (nunca se suben): `.env`, `data/`, `logs/`
-
