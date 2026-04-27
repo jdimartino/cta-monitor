@@ -101,8 +101,11 @@ def get_categories():
 
 
 @app.get("/api/standings")
-def get_standings(categoria: str = None):
-    """Full standings table. Filter by ?categoria=6M"""
+def get_standings(categoria: str = None, group_id: int = None):
+    """Full standings table. Filter by ?categoria=6M or ?group_id=1282"""
+    if group_id:
+        standings = database.get_group_standings(group_id)
+        return {"standings": standings}
     league_id = None
     if categoria:
         cat = next((c for c in config.CATEGORIES if c["name"] == categoria), None)
@@ -111,6 +114,37 @@ def get_standings(categoria: str = None):
             league_id = league["id"] if league else None
     standings = database.get_latest_standings(league_id)
     return {"standings": standings}
+
+
+@app.get("/api/groups")
+def get_groups(categoria: str = None):
+    """List groups. Filter by ?categoria=6M"""
+    if categoria:
+        groups = database.get_groups_by_categoria(categoria)
+    else:
+        with database.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM groups ORDER BY categoria_name, CAST(grupo_num AS INTEGER)"
+            ).fetchall()
+            groups = [dict(r) for r in rows]
+    return {"groups": groups}
+
+
+@app.get("/api/group/{group_id}/fixtures")
+def get_group_fixtures(group_id: int):
+    """Fixtures (calendar) for a specific group."""
+    fixtures = database.get_group_fixtures(group_id)
+    import json as _json
+    result = []
+    for f in fixtures:
+        row = dict(f)
+        if row.get("raw_detail"):
+            try:
+                row["raw_detail"] = _json.loads(row["raw_detail"])
+            except Exception:
+                pass
+        result.append(row)
+    return {"fixtures": result}
 
 
 @app.get("/api/teams")
@@ -210,7 +244,7 @@ def crawl_stream():
     """SSE stream: full crawl (all categories + all players)."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
-        _stream_command([sys.executable, "-u", script, "crawl", "--full"], timeout=3600),
+        _stream_command([sys.executable, "-u", script, "crawl", "--full"], timeout=10800),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -257,7 +291,7 @@ def trigger_crawl():
     try:
         result = subprocess.run(
             [sys.executable, script, "crawl", "--full"],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=10800,
             cwd=str(Path(__file__).parent),
         )
         return {"success": result.returncode == 0, "message": "Crawl completo finalizado" if result.returncode == 0 else "Error en crawl"}
@@ -297,6 +331,57 @@ def _compute_sets(history: list) -> tuple[int, int]:
     return sw, sl
 
 
+def _enrich_stats_from_raw(stats_out: dict) -> dict:
+    """Extrae ranking del raw_data JSON cuando el campo estructurado es NULL.
+    También deserializa `chips` (almacenado como JSON string) a lista."""
+    import re, json as _json
+
+    chips = stats_out.get("chips")
+    if isinstance(chips, str) and chips:
+        try:
+            stats_out["chips"] = _json.loads(chips)
+        except Exception:
+            pass
+
+    raw = stats_out.get("raw_data")
+    if not raw:
+        return stats_out
+    try:
+        raw_dict = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return stats_out
+
+    if stats_out.get("ranking") is None:
+        # Buscar en la clave que contenga "Rank\d+,\d+" o "Ranking1383,20"
+        for v in raw_dict.values():
+            m = re.search(r"[Rr]ank(?:ing)?(?: actual)?\s*(\d+(?:[,.]\d+)?)", str(v))
+            if m:
+                stats_out["ranking"] = m.group(1).replace(",", ".")
+                break
+
+    if stats_out.get("matches_won") is None or stats_out.get("matches_lost") is None:
+        for v in raw_dict.values():
+            m = re.search(r"(\d+)G\s*·\s*(\d+)P", str(v))
+            if not m:
+                continue
+            twu = m.group(1)
+            lost = int(m.group(2))
+            won = None
+            for i in range(1, len(twu)):
+                won_candidate = int(twu[-i:])
+                total_candidate = int(twu[:-i])
+                if total_candidate == won_candidate + lost:
+                    won = won_candidate
+                    break
+            if won is None:
+                won = int(twu) if int(twu) >= lost else 0
+            stats_out["matches_won"] = won
+            stats_out["matches_lost"] = lost
+            break
+
+    return stats_out
+
+
 @app.get("/api/team/{cta_id}")
 def get_team_details(cta_id: int):
     """Team details including players."""
@@ -310,6 +395,8 @@ def get_team_details(cta_id: int):
     for p in players:
         stats = database.get_latest_player_stats(p["cta_id"])
         stats_out = dict(stats) if stats else {}
+        # Enriquecer con raw_data si faltan campos estructurados
+        stats_out = _enrich_stats_from_raw(stats_out)
         history = None
         if stats_out.get("matches_won") is None:
             history = database.get_player_history(p["cta_id"], limit=200)
@@ -328,6 +415,7 @@ def get_team_details(cta_id: int):
             "name": p["name"],
             "cta_id": p["cta_id"],
             "ranking": stats_out.get("ranking"),
+            "photo_url": p.get("photo_url") if isinstance(p, dict) else (p["photo_url"] if "photo_url" in p.keys() else None),
             "stats": stats_out or None
         })
         
@@ -343,10 +431,12 @@ def get_player_profile(cta_id: int):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     stats = database.get_latest_player_stats(cta_id)
-    history = database.get_player_history(cta_id, limit=20)
+    history = database.get_player_history(cta_id, limit=200)
     team = database.get_team_by_player(cta_id)
 
     stats_out = dict(stats) if stats else {}
+    # Enriquecer con raw_data si faltan campos estructurados
+    stats_out = _enrich_stats_from_raw(stats_out)
     # If match counts are missing, compute from history
     if history and stats_out.get("matches_won") is None:
         stats_out["matches_won"] = sum(1 for m in history if m.get("result") == "W")
@@ -378,3 +468,108 @@ def predict_lineup(rival_cta_id: int):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────
+# NEW: data-rich endpoints for redesigned profile
+# ─────────────────────────────────────────────
+@app.get("/api/player/{cta_id}/ranking-history")
+def player_ranking_history(cta_id: int):
+    """Ranking evolution per jornada (sparkline source)."""
+    player = database.get_player(cta_id)
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {
+        "cta_id": cta_id,
+        "history": database.get_player_ranking_history(cta_id),
+    }
+
+
+@app.get("/api/team/{cta_id}/form")
+def team_recent_form(cta_id: int, n: int = 5):
+    """Recent W/L/D form for the team. Reads stored recent_form (W/L letters
+    parsed from the team page) and falls back to computing from match table."""
+    team = database.get_team(cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    stored = team.get("recent_form")
+    letters = list(stored) if stored else []
+    return {
+        "cta_id": cta_id,
+        "form": letters[-n:] if letters else [],
+        "raw": stored,
+    }
+
+
+@app.get("/api/team/{cta_id}/captains")
+def team_captains(cta_id: int):
+    """Captain + sub-captain with contact info if available."""
+    team = database.get_team(cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    def _player_card(player_id):
+        if not player_id:
+            return None
+        with database.get_connection() as conn:
+            row = conn.execute(
+                "SELECT cta_id, name, photo_url, email, phone FROM players WHERE id=?",
+                (player_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    return {
+        "cta_id": cta_id,
+        "captain":    {"name": team.get("captain_name"),    **(_player_card(team.get("captain_player_id"))    or {})},
+        "subcaptain": {"name": team.get("subcaptain_name"), **(_player_card(team.get("subcaptain_player_id")) or {})},
+        "protests": {
+            "used":  team.get("protests_used"),
+            "total": team.get("protests_total"),
+        },
+    }
+
+
+@app.get("/api/team/{cta_id}/matches")
+def get_team_matches(cta_id: int):
+    """All matches (past + upcoming) for a team."""
+    team = database.get_team(cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    matches = database.get_team_matches(cta_id)
+    return {"cta_id": cta_id, "matches": matches}
+
+
+@app.get("/api/match/{match_id}/details")
+def get_match_details(match_id: int):
+    """Get match header + rubber details from player_match_history."""
+    data = database.get_match_details(match_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return data
+
+
+@app.get("/api/refuerzos")
+def refuerzos(categoria: str = None, limit: int = 200):
+    """List refuerzo appearances (a player suiting up for a team that's not
+    their own). Optionally filter by category code (e.g. 6M)."""
+    sql = """
+        SELECT pmh.id, pmh.jornada, pmh.season, pmh.category_match,
+               pmh.club AS played_for, pmh.vs_club, pmh.score, pmh.result,
+               pmh.opponent_name, pmh.partner_name, pmh.rubber_type,
+               p.cta_id AS player_cta_id, p.name AS player_name, p.photo_url,
+               t.name AS home_team_name, t.cta_id AS home_team_cta_id
+        FROM player_match_history pmh
+        JOIN players p ON pmh.player_id = p.id
+        LEFT JOIN teams t ON p.team_id = t.id
+        WHERE pmh.is_refuerzo = 1
+    """
+    args = []
+    if categoria:
+        sql += " AND pmh.category_match = ?"
+        args.append(categoria)
+    sql += " ORDER BY pmh.id DESC LIMIT ?"
+    args.append(limit)
+
+    with database.get_connection() as conn:
+        rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    return {"count": len(rows), "items": rows}

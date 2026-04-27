@@ -37,6 +37,15 @@ def migrate_schema():
         "ALTER TABLE leagues ADD COLUMN gender TEXT",
         "ALTER TABLE leagues ADD COLUMN level INTEGER",
         "ALTER TABLE leagues ADD COLUMN categoria_name TEXT",
+        """CREATE TABLE IF NOT EXISTS groups (
+            id             INTEGER PRIMARY KEY,
+            league_id      INTEGER REFERENCES leagues(id),
+            name           TEXT NOT NULL,
+            grupo_num      TEXT NOT NULL,
+            categoria_name TEXT
+        )""",
+        "ALTER TABLE standings ADD COLUMN group_id INTEGER REFERENCES groups(id)",
+        "ALTER TABLE matches   ADD COLUMN group_id INTEGER REFERENCES groups(id)",
         """CREATE TABLE IF NOT EXISTS player_match_history (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             player_id       INTEGER NOT NULL REFERENCES players(id),
@@ -56,6 +65,59 @@ def migrate_schema():
              match_date,
              COALESCE(rubber_type, ''),
              COALESCE(opponent_name, '')
+           )""",
+
+        # ── Rediseño ctatenis.com 2026-04: nuevos campos ──────────────────
+        # Players: foto, club y datos personales (PII)
+        "ALTER TABLE players ADD COLUMN photo_url     TEXT",
+        "ALTER TABLE players ADD COLUMN club_acronym  TEXT",
+        "ALTER TABLE players ADD COLUMN email         TEXT",
+        "ALTER TABLE players ADD COLUMN phone         TEXT",
+        "ALTER TABLE players ADD COLUMN cedula        TEXT",
+        "ALTER TABLE players ADD COLUMN birth_date    TEXT",
+
+        # Player stats: delta, estado, modalidades, chips
+        "ALTER TABLE player_stats ADD COLUMN ranking_delta REAL",
+        "ALTER TABLE player_stats ADD COLUMN estado        TEXT",
+        "ALTER TABLE player_stats ADD COLUMN modalidades   INTEGER",
+        "ALTER TABLE player_stats ADD COLUMN chips         TEXT",  # JSON array
+
+        # Teams: liderazgo, protestas y promedios
+        "ALTER TABLE teams ADD COLUMN captain_name         TEXT",
+        "ALTER TABLE teams ADD COLUMN subcaptain_name      TEXT",
+        "ALTER TABLE teams ADD COLUMN captain_player_id    INTEGER",
+        "ALTER TABLE teams ADD COLUMN subcaptain_player_id INTEGER",
+        "ALTER TABLE teams ADD COLUMN protests_used        INTEGER",
+        "ALTER TABLE teams ADD COLUMN protests_total       INTEGER",
+        "ALTER TABLE teams ADD COLUMN p_ave                REAL",
+        "ALTER TABLE teams ADD COLUMN set_ave              REAL",
+        "ALTER TABLE teams ADD COLUMN recent_form          TEXT",  # JSON array ["W","L","W"]
+
+        # Player match history: columnas del historial enriquecido
+        "ALTER TABLE player_match_history ADD COLUMN season         TEXT",
+        "ALTER TABLE player_match_history ADD COLUMN category_match TEXT",
+        "ALTER TABLE player_match_history ADD COLUMN club           TEXT",
+        "ALTER TABLE player_match_history ADD COLUMN vs_club        TEXT",
+        "ALTER TABLE player_match_history ADD COLUMN ranking_after  REAL",
+        "ALTER TABLE player_match_history ADD COLUMN jornada        TEXT",
+        "ALTER TABLE player_match_history ADD COLUMN is_refuerzo    INTEGER DEFAULT 0",
+
+        # Nueva tabla: evolución de ranking por jornada (alimenta sparkline)
+        """CREATE TABLE IF NOT EXISTS player_ranking_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id   INTEGER NOT NULL REFERENCES players(id),
+            idx         INTEGER NOT NULL,
+            jornada     TEXT NOT NULL,
+            ranking     REAL NOT NULL,
+            season      TEXT,
+            scraped_at  TEXT DEFAULT (datetime('now'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_prh_player ON player_ranking_history(player_id)",
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_prh_dedup
+           ON player_ranking_history(
+             player_id,
+             COALESCE(season,''),
+             idx
            )""",
     ]
     with get_connection() as conn:
@@ -248,6 +310,70 @@ def get_league(liga_id: int, categoria_id: int) -> dict | None:
 
 
 # ─────────────────────────────────────────────
+# GROUPS
+# ─────────────────────────────────────────────
+def upsert_group(group_id: int, league_id: int, name: str, grupo_num: str, categoria_name: str = None):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO groups (id, league_id, name, grupo_num, categoria_name)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 league_id=COALESCE(excluded.league_id, groups.league_id),
+                 name=excluded.name,
+                 grupo_num=excluded.grupo_num,
+                 categoria_name=COALESCE(excluded.categoria_name, groups.categoria_name)""",
+            (group_id, league_id, name, grupo_num, categoria_name),
+        )
+
+
+def get_groups_by_categoria(categoria_name: str) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT g.* FROM groups g
+               WHERE g.categoria_name = ?
+               ORDER BY CAST(g.grupo_num AS INTEGER)""",
+            (categoria_name,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_group_fixtures(group_id: int) -> list[dict]:
+    """Partidos de un grupo, con nombres de equipos, ordenados por jornada y fecha."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT m.id, m.match_date, m.home_score, m.away_score, m.status,
+                      ht.name as home_team, ht.cta_id as home_cta_id,
+                      at.name as away_team, at.cta_id as away_cta_id,
+                      m.raw_detail
+               FROM matches m
+               JOIN teams ht ON m.home_team_id = ht.id
+               JOIN teams at ON m.away_team_id = at.id
+               WHERE m.group_id = ?
+               ORDER BY m.match_date NULLS LAST, m.id""",
+            (group_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_group_standings(group_id: int) -> list[dict]:
+    """Última snapshot de standings para un grupo específico."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT s.*, t.name as team_name, t.cta_id as team_cta_id
+               FROM standings s
+               JOIN teams t ON s.team_id = t.id
+               WHERE s.group_id = ?
+                 AND s.id = (
+                     SELECT MAX(s2.id) FROM standings s2
+                     WHERE s2.team_id = s.team_id AND s2.group_id = ?
+                 )
+               ORDER BY s.position""",
+            (group_id, group_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
 # TEAMS
 # ─────────────────────────────────────────────
 def upsert_team(cta_id: int, name: str, league_id: int = None, is_own: bool = False) -> int:
@@ -295,16 +421,58 @@ def get_own_team() -> dict | None:
         return dict(row) if row else None
 
 
+def get_team_matches(cta_id: int) -> list[dict]:
+    """Todos los partidos de un equipo (local o visitante), con nombres."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT m.id, m.match_date, m.home_score, m.away_score, m.status,
+                      ht.name as home_team, ht.cta_id as home_cta_id,
+                      at.name as away_team, at.cta_id as away_cta_id,
+                      m.raw_detail
+               FROM matches m
+               JOIN teams ht ON m.home_team_id = ht.id
+               JOIN teams at ON m.away_team_id = at.id
+               WHERE ht.cta_id = ? OR at.cta_id = ?
+               ORDER BY m.match_date NULLS LAST, m.id""",
+            (cta_id, cta_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# Campos escribibles en upsert_team_meta (whitelist defensiva)
+_TEAM_META_COLS = {
+    "captain_name", "subcaptain_name",
+    "captain_player_id", "subcaptain_player_id",
+    "protests_used", "protests_total",
+    "p_ave", "set_ave",
+    "recent_form",
+}
+
+
+def upsert_team_meta(team_id: int, **fields) -> None:
+    """Actualiza campos meta del equipo (capitán, protestas, promedios, forma)."""
+    cols, vals = [], []
+    for k, v in fields.items():
+        if k in _TEAM_META_COLS:
+            cols.append(f"{k}=?")
+            vals.append(v)
+    if not cols:
+        return
+    vals.append(team_id)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE teams SET {', '.join(cols)}, updated_at=datetime('now') WHERE id=?", vals)
+
+
 # ─────────────────────────────────────────────
 # STANDINGS
 # ─────────────────────────────────────────────
-def insert_standings(team_id: int, data: dict) -> int:
+def insert_standings(team_id: int, data: dict, group_id: int = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO standings
                (team_id, position, played, won, lost, sets_won, sets_lost,
-                games_won, games_lost, points)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                games_won, games_lost, points, group_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 team_id,
                 data.get("position"),
@@ -316,6 +484,7 @@ def insert_standings(team_id: int, data: dict) -> int:
                 data.get("games_won"),
                 data.get("games_lost"),
                 data.get("points"),
+                group_id,
             ),
         )
         return cur.lastrowid
@@ -393,16 +562,50 @@ def get_team_players(team_cta_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+_PLAYER_META_COLS = {
+    "photo_url", "club_acronym",
+    "email", "phone", "cedula", "birth_date",
+}
+
+
+def upsert_player_meta(player_id: int, **fields) -> None:
+    """Actualiza campos meta del jugador (foto, contacto, identidad)."""
+    cols, vals = [], []
+    for k, v in fields.items():
+        if k in _PLAYER_META_COLS and v is not None:
+            cols.append(f"{k}=?")
+            vals.append(v)
+    if not cols:
+        return
+    vals.append(player_id)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE players SET {', '.join(cols)}, updated_at=datetime('now') WHERE id=?", vals)
+
+
+def get_player_by_name_in_team(name: str, team_id: int) -> dict | None:
+    """Busca un jugador por nombre dentro de un equipo. Matching case-insensitive."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM players WHERE team_id=? AND lower(name)=lower(?)",
+            (team_id, name),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 # ─────────────────────────────────────────────
 # PLAYER STATS
 # ─────────────────────────────────────────────
 def insert_player_stats(player_id: int, stats: dict) -> int:
+    chips = stats.get("chips")
+    if isinstance(chips, list):
+        chips = json.dumps(chips, ensure_ascii=False)
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO player_stats
                (player_id, ranking, matches_won, matches_lost,
-                sets_won, sets_lost, games_won, games_lost, raw_data)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                sets_won, sets_lost, games_won, games_lost, raw_data,
+                ranking_delta, estado, modalidades, chips)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 player_id,
                 stats.get("ranking"),
@@ -413,6 +616,10 @@ def insert_player_stats(player_id: int, stats: dict) -> int:
                 stats.get("games_won"),
                 stats.get("games_lost"),
                 json.dumps(stats.get("raw_data", {}), ensure_ascii=False),
+                stats.get("ranking_delta"),
+                stats.get("estado"),
+                stats.get("modalidades"),
+                chips,
             ),
         )
         return cur.lastrowid
@@ -436,22 +643,119 @@ def get_latest_player_stats(player_cta_id: int) -> dict | None:
 def upsert_player_match_history(player_id: int, matches: list) -> None:
     with get_connection() as conn:
         for m in matches:
-            conn.execute(
-                """INSERT OR IGNORE INTO player_match_history
-                   (player_id, match_date, opponent_name, opponent_cta_id,
-                    result, score, rubber_type, partner_name)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            # Usa INSERT OR REPLACE para que los campos nuevos (season, club, vs_club,
+            # ranking_after, jornada, is_refuerzo) se actualicen en filas legacy.
+            existing = conn.execute(
+                """SELECT id FROM player_match_history
+                   WHERE player_id=? AND COALESCE(match_date,'')=?
+                     AND COALESCE(rubber_type,'')=? AND COALESCE(opponent_name,'')=?""",
                 (
                     player_id,
-                    m.get("match_date"),
-                    m.get("opponent_name"),
-                    m.get("opponent_cta_id"),
-                    m.get("result"),
-                    m.get("score"),
-                    m.get("rubber_type"),
-                    m.get("partner_name"),
+                    m.get("match_date") or "",
+                    m.get("rubber_type") or "",
+                    m.get("opponent_name") or "",
+                ),
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    """UPDATE player_match_history SET
+                         opponent_cta_id=COALESCE(?, opponent_cta_id),
+                         result=COALESCE(?, result),
+                         score=COALESCE(?, score),
+                         partner_name=COALESCE(?, partner_name),
+                         season=COALESCE(?, season),
+                         category_match=COALESCE(?, category_match),
+                         club=COALESCE(?, club),
+                         vs_club=COALESCE(?, vs_club),
+                         ranking_after=COALESCE(?, ranking_after),
+                         jornada=COALESCE(?, jornada),
+                         is_refuerzo=COALESCE(?, is_refuerzo)
+                       WHERE id=?""",
+                    (
+                        m.get("opponent_cta_id"),
+                        m.get("result"),
+                        m.get("score"),
+                        m.get("partner_name"),
+                        m.get("season"),
+                        m.get("category_match"),
+                        m.get("club"),
+                        m.get("vs_club"),
+                        m.get("ranking_after"),
+                        m.get("jornada"),
+                        1 if m.get("is_refuerzo") else 0 if m.get("is_refuerzo") is not None else None,
+                        existing["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO player_match_history
+                       (player_id, match_date, opponent_name, opponent_cta_id,
+                        result, score, rubber_type, partner_name,
+                        season, category_match, club, vs_club,
+                        ranking_after, jornada, is_refuerzo)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        player_id,
+                        m.get("match_date"),
+                        m.get("opponent_name"),
+                        m.get("opponent_cta_id"),
+                        m.get("result"),
+                        m.get("score"),
+                        m.get("rubber_type"),
+                        m.get("partner_name"),
+                        m.get("season"),
+                        m.get("category_match"),
+                        m.get("club"),
+                        m.get("vs_club"),
+                        m.get("ranking_after"),
+                        m.get("jornada"),
+                        1 if m.get("is_refuerzo") else 0,
+                    ),
+                )
+
+
+# ─────────────────────────────────────────────
+# PLAYER RANKING HISTORY (evolución de ranking por jornada)
+# ─────────────────────────────────────────────
+def replace_player_ranking_history(player_id: int, entries: list, season: str | None = None) -> None:
+    """Reemplaza la evolución de ranking del jugador con el nuevo array.
+    entries: [{jornada, ranking, season?}] — idx se asigna por orden.
+    Borra las entradas previas del mismo (player_id, season) antes de insertar.
+    """
+    if not entries:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM player_ranking_history WHERE player_id=? AND COALESCE(season,'')=?",
+            (player_id, season or ""),
+        )
+        for idx, e in enumerate(entries):
+            conn.execute(
+                """INSERT INTO player_ranking_history
+                   (player_id, idx, jornada, ranking, season)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    player_id,
+                    idx,
+                    e.get("jornada"),
+                    e.get("ranking"),
+                    e.get("season") or season,
                 ),
             )
+
+
+def get_player_ranking_history(player_cta_id: int) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT prh.jornada, prh.ranking, prh.season, prh.idx
+               FROM player_ranking_history prh
+               JOIN players p ON prh.player_id = p.id
+               WHERE p.cta_id = ?
+               ORDER BY prh.season, prh.idx""",
+            (player_cta_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_player_history(player_cta_id: int, limit: int = 20) -> list[dict]:
@@ -490,6 +794,7 @@ def upsert_match(
     away_score: str = None,
     status: str = "scheduled",
     raw_detail: dict = None,
+    group_id: int = None,
 ) -> int:
     with get_connection() as conn:
         # Check if match already exists (same teams + date)
@@ -504,19 +809,20 @@ def upsert_match(
         if existing:
             conn.execute(
                 """UPDATE matches SET home_score=?, away_score=?, status=?,
-                   raw_detail=?, scraped_at=datetime('now')
+                   raw_detail=?, group_id=COALESCE(?, group_id),
+                   scraped_at=datetime('now')
                    WHERE id=?""",
-                (home_score, away_score, status, raw_json, existing["id"]),
+                (home_score, away_score, status, raw_json, group_id, existing["id"]),
             )
             return existing["id"]
         else:
             cur = conn.execute(
                 """INSERT INTO matches
                    (home_team_id, away_team_id, match_date, home_score,
-                    away_score, status, raw_detail)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    away_score, status, raw_detail, group_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (home_team_id, away_team_id, match_date, home_score,
-                 away_score, status, raw_json),
+                 away_score, status, raw_json, group_id),
             )
             return cur.lastrowid
 
@@ -552,6 +858,68 @@ def get_head_to_head(team_a_cta_id: int, team_b_cta_id: int) -> list[dict]:
             (team_a_cta_id, team_b_cta_id, team_b_cta_id, team_a_cta_id),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_match_details(match_id: int) -> dict | None:
+    """Get match header + rubbers from player_match_history.
+    Rubbers deduplicated to home-team perspective.
+    Returns dict with 'match' (header) and 'rubbers' (list).
+    Returns None if match not found; rubbers=[] if no data found.
+    """
+    with get_connection() as conn:
+        # Step 1: Get match header
+        match_row = conn.execute(
+            """SELECT m.id, m.match_date, m.home_score, m.away_score, m.status, m.raw_detail,
+                      ht.name as home_team_name, ht.cta_id as home_team_cta_id,
+                      at.name as away_team_name, at.cta_id as away_team_cta_id
+               FROM matches m
+               JOIN teams ht ON m.home_team_id = ht.id
+               JOIN teams at ON m.away_team_id = at.id
+               WHERE m.id = ?""",
+            (match_id,),
+        ).fetchone()
+
+        if not match_row:
+            return None
+
+        match_dict = dict(match_row)
+
+        # Extract jornada from raw_detail JSON
+        import json
+        raw_detail = match_dict.get("raw_detail")
+        jornada = None
+        if raw_detail:
+            try:
+                detail_obj = json.loads(raw_detail)
+                jornada = detail_obj.get("jornada")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        match_dict["jornada"] = jornada
+
+        # Step 2: Get rubbers (home-perspective only for deduplication)
+        home_name = match_dict["home_team_name"]
+        away_name = match_dict["away_team_name"]
+
+        rubbers = []
+        if jornada and home_name and away_name:
+            rubber_rows = conn.execute(
+                """SELECT pmh.rubber_type, pmh.result, pmh.score, pmh.opponent_name,
+                          pmh.partner_name, p.name as player_name, p.cta_id as player_cta_id
+                   FROM player_match_history pmh
+                   JOIN players p ON pmh.player_id = p.id
+                   WHERE LOWER(TRIM(pmh.club))    = LOWER(TRIM(?))
+                     AND LOWER(TRIM(pmh.vs_club)) = LOWER(TRIM(?))
+                     AND pmh.jornada = ?
+                   ORDER BY pmh.rubber_type DESC, pmh.id ASC""",
+                (home_name, away_name, jornada),
+            ).fetchall()
+            rubbers = [dict(r) for r in rubber_rows]
+
+        return {
+            "match": {k: v for k, v in match_dict.items() if k != "raw_detail"},
+            "rubbers": rubbers,
+        }
 
 
 # ─────────────────────────────────────────────
