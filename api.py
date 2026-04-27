@@ -541,11 +541,33 @@ def get_team_matches(cta_id: int):
 
 @app.get("/api/match/{match_id}/details")
 def get_match_details(match_id: int):
-    """Get match header + rubber details from player_match_history."""
+    """Get match header + rubber details by scraping the CTA create_result page."""
+    import auth
+    import spider
+
     data = database.get_match_details(match_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Match not found")
-    return data
+
+    match = data["match"]
+    fixture_id = match.get("fixture_id")
+
+    if not fixture_id:
+        return {"match": match, "rubbers": []}
+
+    session = auth.get_session()
+    if not session:
+        return {"match": match, "rubbers": []}
+
+    try:
+        url = f"{config.BASE_URL}/cts/create_result/{fixture_id}/"
+        resp = auth.authenticated_get(session, url)
+        if resp.status_code != 200:
+            return {"match": match, "rubbers": []}
+        parsed = spider.parse_match_result_page(resp.text)
+        return {"match": match, "rubbers": parsed["rubbers"]}
+    except Exception:
+        return {"match": match, "rubbers": []}
 
 
 @app.get("/api/refuerzos")

@@ -770,7 +770,8 @@ function renderMatches(matches) {
             : '';
 
         const div = document.createElement('div');
-        div.className = 'match-item';
+        div.className = 'match-item clickable';
+        div.setAttribute('onclick', `openMatchDetailModal(${m.id})`);
         div.innerHTML = `
             <div class="match-result-badge ${resClass}">${resText}</div>
             <div class="match-info">
@@ -1259,25 +1260,34 @@ async function openMatchDetailModal(matchId) {
             : '<span class="result-badge pending">Pendiente</span>';
 
         const renderRubber = r => {
-            const cls = r.result === 'W' ? 'win' : 'loss';
-            const partner = r.partner_name ? `<span class="rubber-partner">/ ${r.partner_name}</span>` : '';
+            const typeLabel = r.type === 'doubles' ? 'Doble' : 'Single';
+            const pos = r.position || '';
+            const isWinnerHome = r.winner === 'home';
+            const isWinnerAway = r.winner === 'away';
+            const homePlayers = (r.home_players || []).map(p => p.name).join(' / ');
+            const awayPlayers = (r.away_players || []).map(p => p.name).join(' / ');
             return `
             <div class="rubber-card">
-                <div class="rubber-players">
-                    <span class="rubber-player clickable" onclick="event.stopPropagation();openPlayerModal(${r.player_cta_id})">${r.player_name}</span>
-                    ${partner}
-                    <span class="rubber-vs">vs</span>
-                    <span class="rubber-opponent">${r.opponent_name || '—'}</span>
-                </div>
-                <div class="rubber-right">
+                <div class="rubber-card-header">
+                    <span class="rubber-type-badge">${typeLabel} ${pos}</span>
                     <span class="rubber-score">${r.score || '—'}</span>
-                    <span class="result-badge ${cls}">${r.result}</span>
+                </div>
+                <div class="rubber-matchup">
+                    <div class="rubber-team ${isWinnerHome ? 'winner' : ''}">
+                        <span class="rubber-team-name">${match.home_team_name || ''}${isWinnerHome ? ' <span class="rubber-winner-g">G</span>' : ''}</span>
+                        <span class="rubber-players-names">${homePlayers || '—'}</span>
+                    </div>
+                    <div class="rubber-team ${isWinnerAway ? 'winner' : ''}">
+                        <span class="rubber-team-name">${match.away_team_name || ''}${isWinnerAway ? ' <span class="rubber-winner-g">G</span>' : ''}</span>
+                        <span class="rubber-players-names">${awayPlayers || '—'}</span>
+                    </div>
                 </div>
             </div>`;
         };
 
-        const singles = rubbers.filter(r => r.rubber_type === 'singles');
-        const doubles = rubbers.filter(r => r.rubber_type === 'doubles');
+        const rubbersHtml = rubbers.length > 0
+            ? rubbers.map(renderRubber).join('')
+            : '<p class="empty-state-msg">Sin detalles de gomas para este partido.<br><small>Ejecuta <strong>Actualizar Grupo</strong> para cargar datos.</small></p>';
 
         content.innerHTML = `
         <div class="match-detail-header">
@@ -1291,11 +1301,7 @@ async function openMatchDetailModal(matchId) {
                 ${match.match_date ? `<span class="fixture-date-inline">${match.match_date}</span>` : ''}
             </div>
         </div>
-        <div class="rubber-list">
-            ${singles.length ? `<div class="rubber-section-title"><i class="ri-user-line"></i> Singles</div>${singles.map(renderRubber).join('')}` : ''}
-            ${doubles.length ? `<div class="rubber-section-title"><i class="ri-group-line"></i> Dobles</div>${doubles.map(renderRubber).join('')}` : ''}
-            ${rubbers.length === 0 ? '<p class="empty-state-msg">Sin detalles de gomas para este partido.</p>' : ''}
-        </div>`;
+        <div class="rubber-list">${rubbersHtml}</div>`;
     } catch(e) {
         content.innerHTML = '<p class="empty-state-msg">Error al cargar el partido.</p>';
         console.error('openMatchDetailModal error:', e);

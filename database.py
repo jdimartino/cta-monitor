@@ -884,41 +884,24 @@ def get_match_details(match_id: int) -> dict | None:
 
         match_dict = dict(match_row)
 
-        # Extract jornada from raw_detail JSON
+        # Extract jornada and fixture_id from raw_detail JSON
         import json
         raw_detail = match_dict.get("raw_detail")
         jornada = None
+        fixture_id = None
         if raw_detail:
             try:
                 detail_obj = json.loads(raw_detail)
                 jornada = detail_obj.get("jornada")
+                fixture_id = detail_obj.get("fixture_id")
             except (json.JSONDecodeError, TypeError):
                 pass
 
         match_dict["jornada"] = jornada
-
-        # Step 2: Get rubbers (home-perspective only for deduplication)
-        home_name = match_dict["home_team_name"]
-        away_name = match_dict["away_team_name"]
-
-        rubbers = []
-        if jornada and home_name and away_name:
-            rubber_rows = conn.execute(
-                """SELECT pmh.rubber_type, pmh.result, pmh.score, pmh.opponent_name,
-                          pmh.partner_name, p.name as player_name, p.cta_id as player_cta_id
-                   FROM player_match_history pmh
-                   JOIN players p ON pmh.player_id = p.id
-                   WHERE LOWER(TRIM(pmh.club))    = LOWER(TRIM(?))
-                     AND LOWER(TRIM(pmh.vs_club)) = LOWER(TRIM(?))
-                     AND pmh.jornada = ?
-                   ORDER BY pmh.rubber_type DESC, pmh.id ASC""",
-                (home_name, away_name, jornada),
-            ).fetchall()
-            rubbers = [dict(r) for r in rubber_rows]
+        match_dict["fixture_id"] = fixture_id
 
         return {
             "match": {k: v for k, v in match_dict.items() if k != "raw_detail"},
-            "rubbers": rubbers,
         }
 
 
