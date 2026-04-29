@@ -7,6 +7,7 @@ Dynamically discovers teams, players, and match data from ctatenis.com.
 
 from __future__ import annotations
 
+import json
 import re
 import hashlib
 import logging
@@ -1517,3 +1518,181 @@ def crawl_single_team(team_cta_id: int, session=None) -> dict:
         crawl_player(session, player["cta_id"])
 
     return team_data
+
+
+# ─────────────────────────────────────────────
+# MATCH RUBBERS — persistence and backfill
+# ─────────────────────────────────────────────
+def persist_match_rubbers(match_id: int, parsed: dict) -> dict:
+    """Persist parsed rubbers from parse_match_result_page into match_rubbers.
+
+    Resolves cta_id (profile_id from parser) → players.id via database.get_player.
+    Skips a rubber if any required player cannot be resolved.
+
+    Returns {scraped, skipped, errors}.
+    """
+    out = {"scraped": 0, "skipped": 0, "errors": 0}
+
+    for rubber in parsed.get("rubbers", []):
+        rubber_type = rubber.get("type")
+        position = rubber.get("position")
+
+        def resolve(slot_players):
+            ids = []
+            for ply in slot_players or []:
+                cta_id = ply.get("profile_id")
+                if not cta_id:
+                    return None
+                row = database.get_player(cta_id)
+                if not row:
+                    return None
+                ids.append(row["id"])
+            return ids
+
+        home_ids = resolve(rubber.get("home_players"))
+        away_ids = resolve(rubber.get("away_players"))
+
+        if home_ids is None or away_ids is None:
+            out["skipped"] += 1
+            continue
+
+        home_player_id  = home_ids[0] if len(home_ids) >= 1 else None
+        home_partner_id = home_ids[1] if len(home_ids) >= 2 else None
+        away_player_id  = away_ids[0] if len(away_ids) >= 1 else None
+        away_partner_id = away_ids[1] if len(away_ids) >= 2 else None
+
+        if rubber_type == "doubles" and (home_partner_id is None or away_partner_id is None):
+            out["skipped"] += 1
+            continue
+        if home_player_id is None or away_player_id is None:
+            out["skipped"] += 1
+            continue
+
+        try:
+            database.insert_rubber(
+                match_id=match_id,
+                position=position,
+                rubber_type=rubber_type,
+                home_player_id=home_player_id,
+                away_player_id=away_player_id,
+                home_partner_id=home_partner_id,
+                away_partner_id=away_partner_id,
+                score=rubber.get("score") or "",
+                winner=rubber.get("winner"),
+            )
+            out["scraped"] += 1
+        except Exception as e:
+            logger.warning(f"[Rubbers] insert failed match={match_id} pos={position}: {e}")
+            out["errors"] += 1
+
+    return out
+
+
+def backfill_match_rubbers(
+    match_id: int,
+    fixture_id: int,
+    session=None,
+    *,
+    force: bool = False,
+) -> dict:
+    """Scrape and persist rubbers for a single match. Idempotent: skips if rubbers
+    already exist unless force=True.
+    """
+    if not force:
+        existing = database.get_rubber_count_for_match(match_id)
+        if existing > 0:
+            return {"scraped": 0, "skipped": existing, "errors": 0, "status": "already_present"}
+
+    if session is None:
+        session = auth.get_session()
+        if not session:
+            return {"scraped": 0, "skipped": 0, "errors": 1, "status": "auth_failed"}
+
+    url = f"{config.BASE_URL}/cts/create_result/{fixture_id}/"
+    resp = auth.authenticated_get(session, url)
+    if resp is None or resp.status_code != 200:
+        return {"scraped": 0, "skipped": 0, "errors": 1, "status": "fetch_failed"}
+
+    parsed = parse_match_result_page(resp.text)
+    result = persist_match_rubbers(match_id, parsed)
+    result["status"] = "ok"
+    return result
+
+
+def backfill_all_match_rubbers(
+    *,
+    only_completed: bool = True,
+    team_cta_id: int | None = None,
+    force: bool = False,
+    progress_cb=None,
+) -> dict:
+    """Walk through matches and populate match_rubbers for each.
+
+    Args:
+        only_completed: skip matches with status != 'completed'.
+        team_cta_id: if set, restrict to matches involving this team.
+        force: re-scrape and re-insert even if rubbers already exist for that match.
+        progress_cb: optional callable(idx, total, match_id, status) for live progress.
+
+    Returns aggregate {processed, scraped, skipped, errors, missing_fixture}.
+    """
+    session = auth.get_session()
+    if not session:
+        return {"processed": 0, "scraped": 0, "skipped": 0, "errors": 0,
+                "missing_fixture": 0, "status": "auth_failed"}
+
+    sql = """
+        SELECT m.id, m.match_date, m.status, m.raw_detail,
+               ht.cta_id AS home_cta_id, at.cta_id AS away_cta_id
+        FROM matches m
+        JOIN teams ht ON m.home_team_id = ht.id
+        JOIN teams at ON m.away_team_id = at.id
+    """
+    args: list = []
+    where: list[str] = []
+    if only_completed:
+        where.append("m.status = 'completed'")
+    if team_cta_id is not None:
+        where.append("(ht.cta_id = ? OR at.cta_id = ?)")
+        args.extend([team_cta_id, team_cta_id])
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY m.match_date DESC"
+
+    with database.get_connection() as conn:
+        rows = conn.execute(sql, args).fetchall()
+
+    totals = {"processed": 0, "scraped": 0, "skipped": 0, "errors": 0,
+              "missing_fixture": 0, "already_present": 0}
+    total = len(rows)
+
+    for idx, row in enumerate(rows, start=1):
+        match_id = row["id"]
+        raw_detail = row["raw_detail"]
+        fixture_id = None
+        if raw_detail:
+            try:
+                detail_obj = json.loads(raw_detail)
+                fixture_id = detail_obj.get("fixture_id")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not fixture_id:
+            totals["missing_fixture"] += 1
+            if progress_cb:
+                progress_cb(idx, total, match_id, "no_fixture")
+            continue
+
+        result = backfill_match_rubbers(match_id, fixture_id, session=session, force=force)
+        if result.get("status") == "already_present":
+            totals["already_present"] += 1
+        else:
+            totals["processed"] += 1
+            totals["scraped"] += result.get("scraped", 0)
+            totals["skipped"] += result.get("skipped", 0)
+            totals["errors"] += result.get("errors", 0)
+
+        if progress_cb:
+            progress_cb(idx, total, match_id, result.get("status", "ok"))
+
+    return totals

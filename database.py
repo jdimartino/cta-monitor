@@ -373,6 +373,31 @@ def get_group_standings(group_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_team_group_rivals(team_cta_id: int) -> list[dict]:
+    """Retorna todos los equipos del mismo grupo que team_cta_id, excluyéndolo."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT s.group_id FROM standings s
+               JOIN teams t ON s.team_id = t.id
+               WHERE t.cta_id = ?
+               ORDER BY s.id DESC LIMIT 1""",
+            (team_cta_id,),
+        ).fetchone()
+        if not row:
+            return []
+        group_id = row["group_id"]
+        rows = conn.execute(
+            """SELECT DISTINCT t.cta_id, t.name, l.categoria_name
+               FROM standings s
+               JOIN teams t ON s.team_id = t.id
+               LEFT JOIN leagues l ON t.league_id = l.id
+               WHERE s.group_id = ? AND t.cta_id != ?
+               ORDER BY t.name""",
+            (group_id, team_cta_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # ─────────────────────────────────────────────
 # TEAMS
 # ─────────────────────────────────────────────
@@ -413,6 +438,34 @@ def get_all_teams(league_id: int = None) -> list[dict]:
         else:
             rows = conn.execute("SELECT * FROM teams ORDER BY name").fetchall()
         return [dict(r) for r in rows]
+
+
+def search_teams(
+    query: str | None = None,
+    category: str | None = None,
+    gender: str | None = None,
+) -> list[dict]:
+    """Busca equipos por nombre (LIKE) con filtros opcionales de categoría y género."""
+    sql = """
+        SELECT t.*, l.categoria_name, l.gender AS league_gender
+        FROM teams t
+        LEFT JOIN leagues l ON t.league_id = l.id
+        WHERE 1=1
+    """
+    params: list = []
+    if query:
+        sql += " AND t.name LIKE ?"
+        params.append(f"%{query}%")
+    if category:
+        sql += " AND l.categoria_name LIKE ?"
+        params.append(f"%{category}%")
+    if gender:
+        sql += " AND l.gender = ?"
+        params.append(gender.upper())
+    sql += " ORDER BY t.name"
+    with get_connection() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_own_team() -> dict | None:
@@ -929,6 +982,146 @@ def insert_rubber(
              home_partner_id, away_partner_id, score, winner),
         )
         return cur.lastrowid
+
+
+def get_rubber_count_for_match(match_id: int) -> int:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM match_rubbers WHERE match_id = ?",
+            (match_id,),
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
+
+def get_rubbers_for_match(match_id: int) -> list[dict]:
+    """Return rubbers for a single match in the shape the frontend expects:
+       {position, type, home_players:[{name,profile_id}], away_players:[...],
+        score, winner}.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT mr.position, mr.rubber_type AS type, mr.score, mr.winner,
+                      hp.name AS home_player_name,   hp.cta_id AS home_player_cta,
+                      ap.name AS away_player_name,   ap.cta_id AS away_player_cta,
+                      hpp.name AS home_partner_name, hpp.cta_id AS home_partner_cta,
+                      app.name AS away_partner_name, app.cta_id AS away_partner_cta
+               FROM match_rubbers mr
+               LEFT JOIN players hp  ON mr.home_player_id  = hp.id
+               LEFT JOIN players ap  ON mr.away_player_id  = ap.id
+               LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+               LEFT JOIN players app ON mr.away_partner_id = app.id
+               WHERE mr.match_id = ?
+               ORDER BY mr.position ASC""",
+            (match_id,),
+        ).fetchall()
+
+        out: list[dict] = []
+        for r in rows:
+            home_players = []
+            if r["home_player_name"]:
+                home_players.append({"name": r["home_player_name"], "profile_id": r["home_player_cta"]})
+            if r["home_partner_name"]:
+                home_players.append({"name": r["home_partner_name"], "profile_id": r["home_partner_cta"]})
+            away_players = []
+            if r["away_player_name"]:
+                away_players.append({"name": r["away_player_name"], "profile_id": r["away_player_cta"]})
+            if r["away_partner_name"]:
+                away_players.append({"name": r["away_partner_name"], "profile_id": r["away_partner_cta"]})
+            out.append({
+                "position":     r["position"],
+                "type":         r["type"],
+                "home_players": home_players,
+                "away_players": away_players,
+                "score":        r["score"] or "",
+                "winner":       r["winner"],
+            })
+        return out
+
+
+def get_rubbers_by_team(team_cta_id: int, last_n: int | None = None) -> list[dict]:
+    """Return rubbers for matches involving the team, ordered by match_date DESC.
+
+    Each row includes:
+      - rubber columns (id, match_id, position, rubber_type, home/away player ids,
+        score, winner)
+      - match metadata: match_date, home_team_cta_id, away_team_cta_id, status,
+        raw_detail (raw JSON, parsed externally)
+      - resolved player names: home_player_name, away_player_name,
+        home_partner_name, away_partner_name
+      - perspective: 'home' or 'away' relative to team_cta_id
+
+    `last_n` limits the number of distinct matches considered (not rubbers).
+    """
+    with get_connection() as conn:
+        if last_n:
+            match_rows = conn.execute(
+                """SELECT m.id FROM matches m
+                   JOIN teams ht ON m.home_team_id = ht.id
+                   JOIN teams at ON m.away_team_id = at.id
+                   WHERE ht.cta_id = ? OR at.cta_id = ?
+                   ORDER BY m.match_date DESC LIMIT ?""",
+                (team_cta_id, team_cta_id, last_n),
+            ).fetchall()
+            match_ids = [r["id"] for r in match_rows]
+            if not match_ids:
+                return []
+            placeholders = ",".join("?" * len(match_ids))
+            rows = conn.execute(
+                f"""SELECT mr.*, m.match_date, m.status, m.raw_detail,
+                          ht.cta_id AS home_team_cta_id,
+                          at.cta_id AS away_team_cta_id,
+                          hp.name AS home_player_name,
+                          ap.name AS away_player_name,
+                          hpp.name AS home_partner_name,
+                          app.name AS away_partner_name,
+                          hp.cta_id AS home_player_cta_id,
+                          ap.cta_id AS away_player_cta_id,
+                          hpp.cta_id AS home_partner_cta_id,
+                          app.cta_id AS away_partner_cta_id
+                   FROM match_rubbers mr
+                   JOIN matches m ON mr.match_id = m.id
+                   JOIN teams ht ON m.home_team_id = ht.id
+                   JOIN teams at ON m.away_team_id = at.id
+                   LEFT JOIN players hp  ON mr.home_player_id  = hp.id
+                   LEFT JOIN players ap  ON mr.away_player_id  = ap.id
+                   LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+                   LEFT JOIN players app ON mr.away_partner_id = app.id
+                   WHERE m.id IN ({placeholders})
+                   ORDER BY m.match_date DESC, mr.position ASC""",
+                match_ids,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT mr.*, m.match_date, m.status, m.raw_detail,
+                          ht.cta_id AS home_team_cta_id,
+                          at.cta_id AS away_team_cta_id,
+                          hp.name AS home_player_name,
+                          ap.name AS away_player_name,
+                          hpp.name AS home_partner_name,
+                          app.name AS away_partner_name,
+                          hp.cta_id AS home_player_cta_id,
+                          ap.cta_id AS away_player_cta_id,
+                          hpp.cta_id AS home_partner_cta_id,
+                          app.cta_id AS away_partner_cta_id
+                   FROM match_rubbers mr
+                   JOIN matches m ON mr.match_id = m.id
+                   JOIN teams ht ON m.home_team_id = ht.id
+                   JOIN teams at ON m.away_team_id = at.id
+                   LEFT JOIN players hp  ON mr.home_player_id  = hp.id
+                   LEFT JOIN players ap  ON mr.away_player_id  = ap.id
+                   LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+                   LEFT JOIN players app ON mr.away_partner_id = app.id
+                   WHERE ht.cta_id = ? OR at.cta_id = ?
+                   ORDER BY m.match_date DESC, mr.position ASC""",
+                (team_cta_id, team_cta_id),
+            ).fetchall()
+
+        out: list[dict] = []
+        for row in rows:
+            d = dict(row)
+            d["perspective"] = "home" if d.get("home_team_cta_id") == team_cta_id else "away"
+            out.append(d)
+        return out
 
 
 def get_player_match_history(player_cta_id: int, limit: int = 20) -> list[dict]:

@@ -129,13 +129,94 @@ def rival(team_id, refresh):
 
 
 @cli.command()
-@click.argument("rival_id", type=int)
-def draw(rival_id):
+@click.option("--rival", "rival_query", default=None, help="Nombre o substring del equipo rival")
+@click.option("--rival-id", "rival_id", type=int, default=None, help="CTA ID del rival")
+@click.option("--category", default=None, help="Filtrar por categoría (ej. '6M', '5F')")
+@click.option("--gender", type=click.Choice(["M", "F"], case_sensitive=False), default=None, help="Género M/F")
+@click.option("--last-n", type=int, default=10, show_default=True, help="Ventana de partidos a analizar")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON crudo")
+def draw(rival_query, rival_id, category, gender, last_n, as_json):
     """Predecir draw contra un rival y sugerir alineacion."""
     import draw_predictor
+    import json as _json
 
-    report = draw_predictor.format_draw_report(rival_id)
-    click.echo(report)
+    # ── Resolver rival ──
+    if rival_id is None and rival_query is None:
+        click.echo("Error: especifica --rival NOMBRE o --rival-id CTA_ID")
+        sys.exit(1)
+
+    if rival_id is None:
+        matches = database.search_teams(query=rival_query, category=category, gender=gender)
+        matches = [t for t in matches if not t.get("is_own_team")]
+        if not matches:
+            click.echo(f"No se encontró ningún equipo con '{rival_query}'")
+            sys.exit(1)
+        if len(matches) > 1:
+            click.echo(f"Se encontraron {len(matches)} equipos. Sé más específico o usa --rival-id:")
+            for t in matches:
+                cat = t.get("categoria_name") or ""
+                gen = t.get("league_gender") or ""
+                click.echo(f"  ID {t['cta_id']:>6}: {t['name']:<30} {cat} {gen}")
+            sys.exit(1)
+        rival_id = matches[0]["cta_id"]
+
+    team = database.get_team(rival_id)
+    if not team:
+        click.echo(f"Error: no se encontró equipo con CTA ID {rival_id}")
+        sys.exit(1)
+
+    if not as_json:
+        click.echo(f"[Draw] Analizando rival: {team['name']} (ID {rival_id})")
+
+    # ── Generar reporte ──
+    if as_json:
+        data = draw_predictor.build_draw_report(rival_id, last_n=last_n)
+        click.echo(_json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        report = draw_predictor.format_draw_report(rival_id, last_n=last_n)
+        click.echo(report)
+
+
+@cli.command()
+@click.option("--all", "all_matches", is_flag=True, help="Backfill todos los partidos completados")
+@click.option("--team", "team_cta_id", type=int, default=None, help="Solo partidos del equipo (CTA ID)")
+@click.option("--force", is_flag=True, help="Re-scrape aunque ya haya rubbers en DB")
+def rubbers(all_matches, team_cta_id, force):
+    """Poblar match_rubbers scrapeando create_result de cada partido."""
+    import spider
+
+    if not all_matches and team_cta_id is None:
+        click.echo("Error: especifica --all o --team CTA_ID")
+        sys.exit(1)
+
+    last_match_id = {"id": None}
+
+    def progress(idx, total, match_id, status):
+        if status == "ok" or status == "already_present":
+            symbol = "·" if status == "already_present" else "+"
+        elif status == "no_fixture":
+            symbol = "?"
+        else:
+            symbol = "x"
+        click.echo(f"  [{idx}/{total}] match={match_id} {symbol} {status}")
+        last_match_id["id"] = match_id
+
+    click.echo(f"[Rubbers] Backfill {'completo' if all_matches else f'team={team_cta_id}'} (force={force})")
+    result = spider.backfill_all_match_rubbers(
+        only_completed=True,
+        team_cta_id=team_cta_id,
+        force=force,
+        progress_cb=progress,
+    )
+
+    click.echo(
+        f"\n[Rubbers] Procesados:{result.get('processed', 0)} "
+        f"Insertados:{result.get('scraped', 0)} "
+        f"YaPresentes:{result.get('already_present', 0)} "
+        f"Skip:{result.get('skipped', 0)} "
+        f"SinFixture:{result.get('missing_fixture', 0)} "
+        f"Errores:{result.get('errors', 0)}"
+    )
 
 
 @cli.command()

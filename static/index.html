@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/draw_predictor.css">
 </head>
 <body>
     <div class="dashboard">
@@ -221,18 +222,24 @@
                     <section class="full-width-section">
                         <div class="glass-panel">
                             <div class="panel-header">
-                                <h3>Selecciona el Equipo Rival</h3>
+                                <h3>Selecciona el Análisis</h3>
                             </div>
                             <div class="predictor-controls">
+                                <select id="categoryFilter" class="rival-select" onchange="onPredictorCategoryChange()" style="max-width:140px">
+                                    <option value="">Categoría ▼</option>
+                                </select>
+                                <select id="teamSelect" class="rival-select" onchange="onPredictorTeamChange()">
+                                    <option value="">Equipo ▼</option>
+                                </select>
                                 <select id="rivalSelect" class="rival-select">
-                                    <option value="">-- Cargando equipos... --</option>
+                                    <option value="">Rival ▼</option>
                                 </select>
                                 <button class="primary-btn predict-run-btn" onclick="runFullPredictor()">
-                                    <i class="ri-magic-line"></i> Predecir Draw
+                                    <i class="ri-magic-line"></i> Analizar 📊
                                 </button>
                             </div>
                             <div id="fullPredictorContent" class="predictor-content full">
-                                <p class="empty-state">Selecciona un rival y haz clic en <strong>Predecir Draw</strong>.</p>
+                                <p class="empty-state">Selecciona una categoría y un rival, luego haz clic en <strong>Predecir Draw</strong>.</p>
                             </div>
                         </div>
                     </section>
@@ -306,5 +313,6 @@
 
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
     <script src="/static/app.js"></script>
+    <script src="/static/draw_predictor.js"></script>
 </body>
 </html>

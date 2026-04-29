@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -456,18 +457,98 @@ def get_player_profile(cta_id: int):
     }
 
 
-@app.get("/api/lineup-predictor/{rival_cta_id}")
-def predict_lineup(rival_cta_id: int):
-    """Predict draw."""
+# ─────────────────────────────────────────────
+# Draw Predictor v2 endpoints
+# ─────────────────────────────────────────────
+
+@app.get("/api/draw-predictor/{rival_cta_id}")
+def draw_predictor_root(rival_cta_id: int, available: Optional[str] = None, own_team: Optional[int] = None):
+    """One-shot: prediction + suggestion + alerts.
+    ?available=cta_id1,cta_id2,... para filtrar roster propio disponible.
+    ?own_team=cta_id para usar un equipo propio distinto al is_own_team.
+    """
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+
+    available_ids: list[int] | None = None
+    if available:
+        try:
+            available_ids = [int(x.strip()) for x in available.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="'available' debe ser lista de CTA IDs separados por coma")
+
     try:
-        report = draw_predictor.suggest_own_lineup(rival_cta_id)
-        predict_rival = draw_predictor.predict_rival_lineup(rival_cta_id)
-        return {
-            "rival_predicted": predict_rival,
-            "our_suggestions": report
-        }
+        from datetime import datetime, timezone
+        result = draw_predictor.build_draw_report(rival_cta_id, available_player_ids=available_ids, own_team_cta_id=own_team)
+        result["generated_at"] = datetime.now(timezone.utc).isoformat()
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/draw-predictor/{rival_cta_id}/timeline")
+def draw_predictor_timeline(rival_cta_id: int, last_n: int = 5):
+    """Últimos N partidos del rival con mini-lineups por slot."""
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+    try:
+        return {"rival_cta_id": rival_cta_id, "timeline": draw_predictor.get_timeline(rival_cta_id, last_n=last_n)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/draw-predictor/{rival_cta_id}/heatmap")
+def draw_predictor_heatmap(rival_cta_id: int):
+    """Matriz jugador × slot del rival (% apariciones)."""
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+    try:
+        return draw_predictor.get_heatmap(rival_cta_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/draw-predictor/{rival_cta_id}/alerts")
+def draw_predictor_alerts(rival_cta_id: int):
+    """Alertas tácticas para el próximo partido contra el rival."""
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+    try:
+        prediction = draw_predictor.predict_rival_lineup_v2(rival_cta_id)
+        alerts = draw_predictor.detect_alerts(rival_cta_id, prediction)
+        return {"rival_cta_id": rival_cta_id, "alerts": alerts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/draw-predictor/{rival_cta_id}/h2h")
+def draw_predictor_h2h(rival_cta_id: int, own_team: Optional[int] = None):
+    """Historial H2H equipo propio vs rival.
+    ?own_team=cta_id para usar un equipo propio distinto al is_own_team.
+    """
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+    try:
+        import config as cfg
+        own_id = own_team or cfg.OWN_TEAM_ID
+        return draw_predictor.get_h2h_team_vs_team(own_id, rival_cta_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/teams/{cta_id}/group-rivals")
+def get_team_group_rivals(cta_id: int):
+    """Retorna los equipos del mismo grupo que el equipo dado, excluyéndolo."""
+    team = database.get_team(cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    rivals = database.get_team_group_rivals(cta_id)
+    return {"team_cta_id": cta_id, "rivals": rivals}
 
 
 # ─────────────────────────────────────────────
@@ -540,8 +621,11 @@ def get_team_matches(cta_id: int):
 
 
 @app.get("/api/match/{match_id}/details")
-def get_match_details(match_id: int):
-    """Get match header + rubber details by scraping the CTA create_result page."""
+def get_match_details(match_id: int, refresh: bool = False):
+    """Get match header + rubber details. Reads from match_rubbers if present;
+    otherwise scrapes the CTA create_result page and persists what it can.
+    Pass ?refresh=true to force a fresh scrape and re-persist.
+    """
     import auth
     import spider
 
@@ -550,24 +634,33 @@ def get_match_details(match_id: int):
         raise HTTPException(status_code=404, detail="Match not found")
 
     match = data["match"]
-    fixture_id = match.get("fixture_id")
 
+    if not refresh:
+        cached = database.get_rubbers_for_match(match_id)
+        if cached:
+            return {"match": match, "rubbers": cached, "source": "db"}
+
+    fixture_id = match.get("fixture_id")
     if not fixture_id:
-        return {"match": match, "rubbers": []}
+        return {"match": match, "rubbers": [], "source": "none"}
 
     session = auth.get_session()
     if not session:
-        return {"match": match, "rubbers": []}
+        return {"match": match, "rubbers": [], "source": "none"}
 
     try:
         url = f"{config.BASE_URL}/cts/create_result/{fixture_id}/"
         resp = auth.authenticated_get(session, url)
-        if resp.status_code != 200:
-            return {"match": match, "rubbers": []}
+        if resp is None or resp.status_code != 200:
+            return {"match": match, "rubbers": [], "source": "none"}
         parsed = spider.parse_match_result_page(resp.text)
-        return {"match": match, "rubbers": parsed["rubbers"]}
+        try:
+            spider.persist_match_rubbers(match_id, parsed)
+        except Exception:
+            pass
+        return {"match": match, "rubbers": parsed["rubbers"], "source": "scrape"}
     except Exception:
-        return {"match": match, "rubbers": []}
+        return {"match": match, "rubbers": [], "source": "none"}
 
 
 @app.get("/api/refuerzos")

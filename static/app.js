@@ -1770,113 +1770,103 @@ async function fetchStandings(categoria = null) {
 // ─────────────────────────────────────────────
 // VISTA: PREDICTOR DE DRAW
 // ─────────────────────────────────────────────
+let _allPredictorTeams = [];   // todos los equipos con categoria_name
+
 async function fetchRivalTeams() {
-    const select = document.getElementById('rivalSelect');
-    select.innerHTML = '<option value="">-- Cargando equipos... --</option>';
+    const catSel  = document.getElementById('categoryFilter');
+    const teamSel = document.getElementById('teamSelect');
+    teamSel.innerHTML = '<option value="">Equipo ▼</option>';
 
     try {
-        const res = await fetch(`${API_BASE}/api/teams`);
+        const res  = await fetch(`${API_BASE}/api/teams`);
         const data = await res.json();
-        const rivals = (data.teams || []).filter(t => !t.is_own_team);
+        _allPredictorTeams = data.teams || [];
 
-        select.innerHTML = '<option value="">-- Selecciona un rival --</option>';
-        rivals.forEach(t => {
+        // Poblar categorías únicas ordenadas
+        const cats = [...new Set(_allPredictorTeams.map(t => t.categoria_name).filter(Boolean))].sort();
+        catSel.innerHTML = '<option value="">Categoría ▼</option>';
+        cats.forEach(c => {
             const opt = document.createElement('option');
-            opt.value = t.cta_id;
-            opt.textContent = expandTeamName(t.name);
-            select.appendChild(opt);
+            opt.value = c;
+            opt.textContent = c;
+            catSel.appendChild(opt);
         });
 
-        if (rivals.length === 0) {
-            select.innerHTML = '<option value="">Sin equipos disponibles. Ejecuta sync.</option>';
-        }
+        // Preseleccionar categoría del equipo propio
+        const ownTeam = _allPredictorTeams.find(t => t.is_own_team);
+        if (ownTeam && ownTeam.categoria_name) catSel.value = ownTeam.categoria_name;
+
+        onPredictorCategoryChange();
+
     } catch (e) {
-        select.innerHTML = '<option value="">Error al cargar equipos</option>';
+        teamSel.innerHTML = '<option value="">Error al cargar equipos</option>';
         console.error("Error al cargar equipos:", e);
     }
 }
 
-async function runFullPredictor() {
-    const select  = document.getElementById('rivalSelect');
-    const content = document.getElementById('fullPredictorContent');
-    const rivalId = select.value;
+function onPredictorCategoryChange() {
+    const cat     = document.getElementById('categoryFilter').value;
+    const teamSel = document.getElementById('teamSelect');
+    const filtered = cat ? _allPredictorTeams.filter(t => t.categoria_name === cat) : _allPredictorTeams;
 
-    if (!rivalId) {
-        content.innerHTML = '<p class="text-muted">Selecciona un equipo rival primero.</p>';
+    teamSel.innerHTML = '<option value="">Equipo ▼</option>';
+    filtered.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t.cta_id;
+        opt.textContent = expandTeamName(t.name);
+        teamSel.appendChild(opt);
+    });
+
+    // Preseleccionar equipo propio si está en la lista
+    const ownTeam = filtered.find(t => t.is_own_team);
+    if (ownTeam) teamSel.value = ownTeam.cta_id;
+
+    // Resetear rival
+    document.getElementById('rivalSelect').innerHTML = '<option value="">Rival ▼</option>';
+    if (teamSel.value) onPredictorTeamChange();
+}
+
+async function onPredictorTeamChange() {
+    const teamId  = document.getElementById('teamSelect').value;
+    const rivalSel = document.getElementById('rivalSelect');
+    rivalSel.innerHTML = '<option value="">Cargando rivales...</option>';
+
+    if (!teamId) {
+        rivalSel.innerHTML = '<option value="">Rival ▼</option>';
         return;
     }
 
-    const rivalName = expandTeamName(select.options[select.selectedIndex].text);
-    content.innerHTML = `
-        <div style="text-align:center;padding:2rem">
-            <div class="loading-spinner" style="margin:0 auto 1rem"></div>
-            <p class="text-muted">Calculando alineación óptima contra <strong>${rivalName}</strong>...</p>
-        </div>`;
-
     try {
-        const res = await fetch(`${API_BASE}/api/lineup-predictor/${rivalId}`);
-        const data = await res.json();
+        const res   = await fetch(`${API_BASE}/api/teams/${teamId}/group-rivals`);
+        const data  = await res.json();
+        const rivals = data.rivals || [];
 
-        if (!data.our_suggestions || data.our_suggestions.length === 0) {
-            content.innerHTML =
-                '<p class="text-muted" style="padding:1rem">Sin datos suficientes para predecir. Ejecuta un crawl completo del equipo rival.</p>';
+        if (rivals.length === 0) {
+            rivalSel.innerHTML = '<option value="">Sin rivales en el mismo grupo</option>';
             return;
         }
-
-        let html = `<div class="predictor-rival-title">vs. <strong>${rivalName}</strong></div>`;
-        html += '<div class="predictor-columns">';
-
-        // Columna: Sugerencia Táchira
-        html += '<div class="pred-col"><h4>Sugerencia Táchira</h4>';
-        data.our_suggestions.forEach(s => {
-            const p1 = s.player?.name || '?';
-            if (s.type === 'singles') {
-                html += `
-                <div class="matchup-row">
-                    <div class="matchup-pos">S${s.position}</div>
-                    <div class="player-box"><span>${p1}</span></div>
-                    <div class="vs-badge">VS</div>
-                    <div class="player-box"><span class="rival-name">${s.vs || 'Rival'}</span></div>
-                </div>`;
-            } else {
-                const partner = s.partner?.name || '?';
-                html += `
-                <div class="matchup-row">
-                    <div class="matchup-pos">Dbl</div>
-                    <div class="player-box"><span>${p1} &amp; ${partner}</span></div>
-                </div>`;
-            }
+        rivalSel.innerHTML = '<option value="">-- Selecciona un rival --</option>';
+        rivals.forEach(t => {
+            const opt = document.createElement('option');
+            opt.value = t.cta_id;
+            opt.textContent = expandTeamName(t.name);
+            rivalSel.appendChild(opt);
         });
-        html += '</div>';
-
-        // Columna: Alineación rival estimada
-        if (data.rival_predicted && data.rival_predicted.length > 0) {
-            html += '<div class="pred-col"><h4>Rival Estimado</h4>';
-            data.rival_predicted.forEach(s => {
-                const name = s.player?.name || '?';
-                const pos  = s.type === 'singles' ? `S${s.position}` : 'Dbl';
-                const conf = Math.round((s.confidence || 0.5) * 100);
-                html += `
-                <div class="matchup-row rival-pred-row">
-                    <div class="matchup-pos">${pos}</div>
-                    <div class="player-box"><span>${name}</span></div>
-                    <div class="confidence-wrap">
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" style="width:${conf}%"></div>
-                        </div>
-                        <span class="confidence-label">${conf}%</span>
-                    </div>
-                </div>`;
-            });
-            html += '</div>';
-        }
-
-        html += '</div>';
-        content.innerHTML = html;
-
     } catch (e) {
-        content.innerHTML = `<p class="text-muted">Error al calcular: ${e.message}</p>`;
+        rivalSel.innerHTML = '<option value="">Error al cargar rivales</option>';
+        console.error("Error al cargar rivales del grupo:", e);
     }
+}
+
+async function runFullPredictor() {
+    const rivalId = document.getElementById('rivalSelect').value;
+    const teamId  = document.getElementById('teamSelect').value;
+    if (!rivalId) {
+        document.getElementById('fullPredictorContent').innerHTML =
+            '<p class="text-muted">Selecciona categoría, equipo y rival primero.</p>';
+        return;
+    }
+    window.DrawPredictor.load(rivalId, teamId || null);
 }
 
 // ─────────────────────────────────────────────
