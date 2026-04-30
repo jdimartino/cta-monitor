@@ -622,7 +622,7 @@ function startSSE(url, btnId, btnIdleHTML, title) {
 // SINCRONIZACIÓN
 // ─────────────────────────────────────────────
 function syncData() {
-    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
+    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
     startSSE(
         '/api/sync/stream',
         'syncBtn',
@@ -632,7 +632,7 @@ function syncData() {
 }
 
 function groupSync() {
-    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
+    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
     startSSE(
         '/api/group/stream',
         'groupBtn',
@@ -642,7 +642,7 @@ function groupSync() {
 }
 
 function crawlFull() {
-    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
+    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
     startSSE(
         '/api/crawl/stream',
         'crawlBtn',
