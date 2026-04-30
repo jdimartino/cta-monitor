@@ -5,7 +5,9 @@ import sys
 import threading
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -27,6 +29,116 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ─────────────────────────────────────────────
+# AUTH: Dependencias
+# ─────────────────────────────────────────────
+_bearer = HTTPBearer(auto_error=False)
+
+
+def _resolve_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    token: Optional[str] = Query(default=None),
+) -> Optional[str]:
+    """Acepta token por Bearer header O por ?token= (necesario para EventSource/SSE)."""
+    if credentials:
+        return credentials.credentials
+    return token
+
+
+def get_current_user(token: Optional[str] = Depends(_resolve_token)) -> dict:
+    user = database.get_session_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    return user
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Se requiere rol admin")
+    return user
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class UpdateUserRequest(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
+
+
+# ─────────────────────────────────────────────
+# AUTH: Endpoints
+# ─────────────────────────────────────────────
+
+@app.post("/api/auth/login")
+def login(body: LoginRequest):
+    user = database.verify_user(body.username, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+    token = database.create_session(user["id"])
+    return {
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "is_admin": bool(user["is_admin"])},
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict = Depends(get_current_user)):
+    return {"id": user["id"], "username": user["username"], "is_admin": bool(user["is_admin"])}
+
+
+@app.post("/api/auth/logout")
+def logout(token: Optional[str] = Depends(_resolve_token)):
+    if token:
+        database.delete_session(token)
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────
+# ADMIN: CRUD de usuarios
+# ─────────────────────────────────────────────
+
+@app.get("/api/admin/users")
+def admin_list_users(_: dict = Depends(require_admin)):
+    return {"users": database.get_all_users()}
+
+
+@app.post("/api/admin/users")
+def admin_create_user(body: CreateUserRequest, _: dict = Depends(require_admin)):
+    try:
+        return {"user": database.create_user(body.username, body.password, body.is_admin)}
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.put("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, body: UpdateUserRequest, _: dict = Depends(require_admin)):
+    if not database.get_user_by_id(user_id):
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    database.update_user(user_id, body.username, body.password, body.is_admin)
+    return {"ok": True}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, _: dict = Depends(require_admin)):
+    user = database.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if user["username"] == "admin":
+        raise HTTPException(status_code=400, detail="No se puede eliminar el usuario admin")
+    database.delete_user(user_id)
+    return {"ok": True}
+
 
 @app.get("/")
 def serve_index():
@@ -219,7 +331,7 @@ def _stream_command(cmd: list[str], timeout: int):
 
 
 @app.get("/api/sync/stream")
-def sync_stream():
+def sync_stream(_: dict = Depends(require_admin)):
     """SSE stream: sync standings + own team."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
@@ -230,7 +342,7 @@ def sync_stream():
 
 
 @app.get("/api/group/stream")
-def group_stream():
+def group_stream(_: dict = Depends(require_admin)):
     """SSE stream: group crawl (standings + fixtures)."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
@@ -241,7 +353,7 @@ def group_stream():
 
 
 @app.get("/api/crawl/stream")
-def crawl_stream():
+def crawl_stream(_: dict = Depends(require_admin)):
     """SSE stream: full crawl (all categories + all players)."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
@@ -462,7 +574,7 @@ def get_player_profile(cta_id: int):
 # ─────────────────────────────────────────────
 
 @app.get("/api/draw-predictor/{rival_cta_id}")
-def draw_predictor_root(rival_cta_id: int, available: Optional[str] = None, own_team: Optional[int] = None):
+def draw_predictor_root(rival_cta_id: int, available: Optional[str] = None, own_team: Optional[int] = None, _: dict = Depends(get_current_user)):
     """One-shot: prediction + suggestion + alerts.
     ?available=cta_id1,cta_id2,... para filtrar roster propio disponible.
     ?own_team=cta_id para usar un equipo propio distinto al is_own_team.
@@ -488,7 +600,7 @@ def draw_predictor_root(rival_cta_id: int, available: Optional[str] = None, own_
 
 
 @app.get("/api/draw-predictor/{rival_cta_id}/timeline")
-def draw_predictor_timeline(rival_cta_id: int, last_n: int = 5):
+def draw_predictor_timeline(rival_cta_id: int, last_n: int = 5, _: dict = Depends(get_current_user)):
     """Últimos N partidos del rival con mini-lineups por slot."""
     team = database.get_team(rival_cta_id)
     if not team:
@@ -500,7 +612,7 @@ def draw_predictor_timeline(rival_cta_id: int, last_n: int = 5):
 
 
 @app.get("/api/draw-predictor/{rival_cta_id}/heatmap")
-def draw_predictor_heatmap(rival_cta_id: int):
+def draw_predictor_heatmap(rival_cta_id: int, _: dict = Depends(get_current_user)):
     """Matriz jugador × slot del rival (% apariciones)."""
     team = database.get_team(rival_cta_id)
     if not team:
@@ -512,7 +624,7 @@ def draw_predictor_heatmap(rival_cta_id: int):
 
 
 @app.get("/api/draw-predictor/{rival_cta_id}/alerts")
-def draw_predictor_alerts(rival_cta_id: int):
+def draw_predictor_alerts(rival_cta_id: int, _: dict = Depends(get_current_user)):
     """Alertas tácticas para el próximo partido contra el rival."""
     team = database.get_team(rival_cta_id)
     if not team:
@@ -526,7 +638,7 @@ def draw_predictor_alerts(rival_cta_id: int):
 
 
 @app.get("/api/draw-predictor/{rival_cta_id}/h2h")
-def draw_predictor_h2h(rival_cta_id: int, own_team: Optional[int] = None):
+def draw_predictor_h2h(rival_cta_id: int, own_team: Optional[int] = None, _: dict = Depends(get_current_user)):
     """Historial H2H equipo propio vs rival.
     ?own_team=cta_id para usar un equipo propio distinto al is_own_team.
     """

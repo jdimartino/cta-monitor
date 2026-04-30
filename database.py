@@ -8,7 +8,9 @@ from __future__ import annotations
 import sqlite3
 import json
 from contextlib import contextmanager
-from datetime import datetime
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 
 import config
 
@@ -119,6 +121,23 @@ def migrate_schema():
              COALESCE(season,''),
              idx
            )""",
+        """CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt          TEXT NOT NULL,
+            is_admin      INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT DEFAULT (datetime('now')),
+            updated_at    TEXT DEFAULT (datetime('now'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS sessions (
+            token      TEXT PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT DEFAULT (datetime('now')),
+            expires_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
     ]
     with get_connection() as conn:
         for sql in migrations:
@@ -244,6 +263,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_matches_away ON matches(away_team_id);
             CREATE INDEX IF NOT EXISTS idx_match_rubbers_match ON match_rubbers(match_id);
         """)
+    _ensure_admin_user()
 
 
 # ─────────────────────────────────────────────
@@ -546,24 +566,38 @@ def insert_standings(team_id: int, data: dict, group_id: int = None) -> int:
 def get_latest_standings(league_id: int = None) -> list[dict]:
     """Get the most recent standings snapshot for each team."""
     with get_connection() as conn:
-        # Only show standings from the group page (sets_won IS NOT NULL).
-        # Legacy rows from the general league crawl have sets_won = NULL and
-        # are excluded so the table only reflects the real group standings.
-        query = """
-            SELECT s.*, t.name as team_name, t.cta_id as team_cta_id
-            FROM standings s
-            JOIN teams t ON s.team_id = t.id
-            WHERE s.id = (
-                SELECT MAX(s2.id) FROM standings s2
-                WHERE s2.team_id = s.team_id
-            )
-            AND s.sets_won IS NOT NULL
-        """
         if league_id:
-            query += " AND t.league_id = ?"
-            rows = conn.execute(query + " ORDER BY s.position", (league_id,)).fetchall()
+            # For a specific league/category: only include group-page rows
+            # (sets_won IS NOT NULL) so the table reflects real group standings.
+            query = """
+                SELECT s.*, t.name as team_name, t.cta_id as team_cta_id
+                FROM standings s
+                JOIN teams t ON s.team_id = t.id
+                WHERE s.id = (
+                    SELECT MAX(s2.id) FROM standings s2
+                    WHERE s2.team_id = s.team_id
+                )
+                AND s.sets_won IS NOT NULL
+                AND t.league_id = ?
+                ORDER BY s.position
+            """
+            rows = conn.execute(query, (league_id,)).fetchall()
         else:
-            rows = conn.execute(query + " ORDER BY s.position").fetchall()
+            # "Todas": show every team that has any standings record,
+            # ordered by points descending so the best teams appear first.
+            query = """
+                SELECT s.*, t.name as team_name, t.cta_id as team_cta_id,
+                       l.categoria_name
+                FROM standings s
+                JOIN teams t ON s.team_id = t.id
+                LEFT JOIN leagues l ON t.league_id = l.id
+                WHERE s.id = (
+                    SELECT MAX(s2.id) FROM standings s2
+                    WHERE s2.team_id = s.team_id
+                )
+                ORDER BY COALESCE(s.points, 0) DESC, COALESCE(s.won, 0) DESC
+            """
+            rows = conn.execute(query).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -1234,3 +1268,120 @@ def migrate_legacy_state():
         print(f"[DB] Migrated {len(state)} hashes from cta_state.json")
     except Exception as e:
         print(f"[DB] Warning: Could not migrate legacy state: {e}")
+
+
+# ─────────────────────────────────────────────
+# AUTH: Usuarios y sesiones
+# ─────────────────────────────────────────────
+
+def _hash_password(password: str, salt: str) -> str:
+    dk = hashlib.pbkdf2_hmac(
+        'sha256', password.encode('utf-8'),
+        bytes.fromhex(salt), iterations=260_000,
+    )
+    return dk.hex()
+
+
+def _ensure_admin_user():
+    with get_connection() as conn:
+        if conn.execute("SELECT id FROM users WHERE username='admin'").fetchone():
+            return
+        salt = secrets.token_hex(32)
+        conn.execute(
+            "INSERT INTO users (username, password_hash, salt, is_admin) VALUES (?,?,?,1)",
+            ("admin", _hash_password("lalo2221", salt), salt),
+        )
+
+
+def verify_user(username: str, password: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    if not row:
+        return None
+    return dict(row) if _hash_password(password, row["salt"]) == row["password_hash"] else None
+
+
+def create_session(user_id: int) -> str:
+    token = secrets.token_hex(32)
+    expires = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)",
+            (token, user_id, expires),
+        )
+    return token
+
+
+def get_session_user(token: str | None) -> dict | None:
+    if not token:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT u.* FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?",
+            (token, now),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_session(token: str):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+def get_all_users() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, username, is_admin, created_at, updated_at FROM users ORDER BY id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, is_admin, created_at FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_user(username: str, password: str, is_admin: bool = False) -> dict:
+    salt = secrets.token_hex(32)
+    with get_connection() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, salt, is_admin) VALUES (?,?,?,?)",
+                (username, _hash_password(password, salt), salt, 1 if is_admin else 0),
+            )
+            row = conn.execute(
+                "SELECT id, username, is_admin, created_at FROM users WHERE username=?", (username,)
+            ).fetchone()
+            return dict(row)
+        except Exception as exc:
+            raise ValueError(f"Username '{username}' ya existe") from exc
+
+
+def update_user(user_id: int, username: str | None = None,
+                password: str | None = None, is_admin: bool | None = None):
+    with get_connection() as conn:
+        if username is not None:
+            conn.execute(
+                "UPDATE users SET username=?, updated_at=datetime('now') WHERE id=?",
+                (username, user_id),
+            )
+        if password is not None:
+            salt = secrets.token_hex(32)
+            conn.execute(
+                "UPDATE users SET password_hash=?, salt=?, updated_at=datetime('now') WHERE id=?",
+                (_hash_password(password, salt), salt, user_id),
+            )
+        if is_admin is not None:
+            conn.execute(
+                "UPDATE users SET is_admin=?, updated_at=datetime('now') WHERE id=?",
+                (1 if is_admin else 0, user_id),
+            )
+
+
+def delete_user(user_id: int):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))

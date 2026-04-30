@@ -64,16 +64,29 @@ body {
 }
 
 .logo-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, var(--accent-blue), #00A3FF);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ccff00, #9ef01a);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    color: #fff;
-    box-shadow: 0 4px 15px var(--accent-blue-dim);
+    font-size: 24px;
+    color: #1a1d24;
+    box-shadow: 0 0 20px rgba(158, 240, 26, 0.3);
+}
+
+.logo-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.logo-version {
+    font-size: 10px;
+    color: var(--text-muted);
+    line-height: 1.2;
+    font-weight: 500;
 }
 
 .nav-menu {
@@ -2107,13 +2120,34 @@ body {
     text-align: center;
     padding: 2px 8px;
     border-radius: 6px;
-    background: rgba(255,255,255,0.04);
+    background: rgba(255,255,255,0.06);
     font-weight: 600;
     font-size: 11px;
+    min-height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.history-row-pmh .hist-vs-club { background: rgba(0,228,255,0.05); }
+.history-row-pmh .hist-empty-col {
+    color: var(--text-muted);
+    text-align: center;
+}
+.history-row-pmh .hist-vs-club { background: rgba(0,228,255,0.08); }
 .history-row-pmh .hist-opponent { color: var(--text-secondary, #cbd5e1); }
-.history-row-pmh .hist-partner { display: block; color: var(--text-muted); font-size: 10px; }
+.history-row-pmh .hist-partner {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent-blue);
+    font-size: 11px;
+    margin-top: 2px;
+    opacity: 0.9;
+    font-weight: 500;
+}
+.history-row-pmh .hist-partner i {
+    font-size: 12px;
+    opacity: 0.7;
+}
 .history-row-pmh .hist-score { font-family: 'Courier New', monospace; color: var(--text-secondary, #cbd5e1); }
 .history-row-pmh .hist-rank-after { color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
 .history-row-pmh .ref-badge { font-size: 11px; }
@@ -2344,3 +2378,113 @@ body {
     .topbar-actions .sync-status { display: none; }
     #syncBtn span, #groupBtn span, #crawlBtn span { display: none; }
 }
+
+/* ─────────────────────────────────────────────
+   LOGIN OVERLAY
+───────────────────────────────────────────── */
+.login-overlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 18, 24, 0.96);
+    backdrop-filter: blur(12px);
+    z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+}
+
+.login-card {
+    width: 100%; max-width: 400px;
+    padding: 40px; border-radius: 24px;
+    animation: fadeSlideDown .25s ease;
+}
+
+.login-header { text-align: center; margin-bottom: 32px; }
+.login-header h2 { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+.login-subtitle { color: var(--text-muted); font-size: 14px; }
+
+.login-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+.login-field label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.login-field input {
+    background: var(--bg-dark); border: 1px solid var(--border-color);
+    border-radius: 12px; padding: 12px 16px;
+    color: var(--text-primary); font-family: inherit; font-size: 15px;
+    outline: none; transition: border-color .2s;
+}
+.login-field input:focus { border-color: rgba(0, 228, 255, .4); }
+
+.login-error {
+    color: var(--accent-red); font-size: 13px; margin-bottom: 12px;
+    background: rgba(248, 113, 113, .1); border-radius: 8px; padding: 8px 12px;
+}
+
+.login-submit-btn {
+    width: 100%; height: 48px; border-radius: 12px;
+    font-size: 15px; justify-content: center; gap: 8px; margin-top: 4px;
+}
+
+.login-cancel-btn {
+    display: block; width: 100%; margin-top: 10px;
+    background: none; border: none; color: var(--text-muted);
+    font-family: inherit; font-size: 13px; cursor: pointer;
+    text-align: center; padding: 6px;
+}
+.login-cancel-btn:hover { color: var(--text-secondary); }
+
+/* ─────────────────────────────────────────────
+   LOGOUT BTN (sidebar)
+───────────────────────────────────────────── */
+.logout-btn { color: var(--text-muted) !important; flex-shrink: 0; }
+.logout-btn:hover {
+    color: var(--accent-red) !important;
+    border-color: rgba(248, 113, 113, .3) !important;
+}
+
+/* ─────────────────────────────────────────────
+   ADMIN: Panel de usuarios
+───────────────────────────────────────────── */
+.admin-actions { display: flex; gap: 6px; }
+
+.danger-btn { color: var(--accent-red) !important; border-color: rgba(248, 113, 113, .2) !important; }
+.danger-btn:hover { background: rgba(248, 113, 113, .1) !important; }
+
+.cat-badge.cat-admin { background: rgba(176, 107, 255, .15); color: var(--accent-purple); }
+.cat-badge.cat-user  { background: rgba(100, 116, 139, .15); color: var(--text-secondary); }
+
+#userModal .modal-card { max-width: 440px; width: 95%; }
+
+/* Expansion de Perfil de Jugador */
+#playerModal .modal-card {
+    max-width: 900px;
+    width: 95%;
+    max-height: 90vh;
+}
+
+@media (max-width: 768px) {
+    #playerModal .modal-card {
+        padding: 1.25rem;
+        border-radius: 0;
+        max-height: 100vh;
+        height: 100vh;
+        width: 100vw;
+    }
+}
+
+
+.admin-actions-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 10px;
+}
+
+.admin-actions-grid .icon-btn {
+    flex: 1;
+    min-width: 180px;
+    height: 48px;
+    justify-content: center;
+    border-radius: 16px;
+}
+
+/* Ensure buttons look correct in the grid */
+.admin-actions-grid .icon-btn i {
+    font-size: 18px;
+}
+

@@ -12,6 +12,116 @@ let ownTeamPlayers = [];   // Cache de jugadores propios
 let clubsMap = {};         // { "TAC": "Club Tachira", ... }
 let ownTeamId = null;      // Se llena desde /api/dashboard
 
+let currentUser = null;   // { id, username, is_admin }
+let authToken   = null;   // string hex-64 o null
+
+function authFetch(url, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    return fetch(url, { ...options, headers });
+}
+
+// ─────────────────────────────────────────────
+// AUTH: Login / Logout / Check
+// ─────────────────────────────────────────────
+function showLoginOverlay() { 
+    document.getElementById('loginOverlay').style.display = 'flex'; 
+    document.getElementById('loginUsername').focus();
+}
+
+function hideLoginOverlay() { 
+    document.getElementById('loginOverlay').style.display = 'none'; 
+    navigateTo('posiciones'); 
+}
+
+// Handler global para tecla ESC en el login
+window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        const login = document.getElementById('loginOverlay');
+        if (login && login.style.display === 'flex') {
+            hideLoginOverlay();
+        }
+    }
+});
+
+async function checkAuth() {
+    const saved = localStorage.getItem('cta_auth_token');
+    if (!saved) return false;
+    try {
+        const res = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${saved}` } });
+        if (!res.ok) { localStorage.removeItem('cta_auth_token'); return false; }
+        currentUser = await res.json();
+        authToken = saved;
+        _applyAuthState();
+        return true;
+    } catch { return false; }
+}
+
+function _applyAuthState() {
+    const nameEl    = document.getElementById('userNameLabel');
+    const roleEl    = document.getElementById('userRoleLabel');
+    const avatarEl  = document.getElementById('userAvatar');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const navAdmin  = document.getElementById('navItemAdmin');
+
+    if (currentUser) {
+        // ── Logueado ──
+        if (nameEl)    nameEl.textContent = currentUser.username;
+        if (roleEl)    roleEl.innerHTML   = currentUser.is_admin ? 'Administrador' : 'Usuario';
+        if (avatarEl)  { avatarEl.innerHTML = '<i class="ri-user-smile-line"></i>'; avatarEl.style.opacity = '1'; }
+        if (logoutBtn) logoutBtn.style.display = 'flex';
+        if (navAdmin)  navAdmin.style.display  = currentUser.is_admin ? 'flex' : 'none';
+    } else {
+        // ── Invitado ──
+        if (nameEl)    nameEl.textContent = 'Invitado';
+        if (roleEl)    roleEl.innerHTML   = '<a href="#" onclick="showLoginOverlay();return false;" style="color:var(--accent-blue);font-size:12px;text-decoration:none;">Iniciar sesión →</a>';
+        if (avatarEl)  { avatarEl.innerHTML = '<i class="ri-user-line"></i>'; avatarEl.style.opacity = '0.4'; }
+        if (logoutBtn) logoutBtn.style.display = 'none';
+        if (navAdmin)  navAdmin.style.display  = 'none';
+    }
+}
+
+
+async function handleLogin(event) {
+    event.preventDefault();
+    const username  = document.getElementById('loginUsername').value.trim();
+    const password  = document.getElementById('loginPassword').value;
+    const errEl     = document.getElementById('loginError');
+    const submitBtn = document.getElementById('loginSubmitBtn');
+    errEl.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Ingresando...';
+    try {
+        const res  = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) { errEl.textContent = data.detail || 'Error'; errEl.style.display = 'block'; return; }
+        authToken   = data.token;
+        currentUser = data.user;
+        localStorage.setItem('cta_auth_token', authToken);
+        hideLoginOverlay();
+        _applyAuthState();
+        loadClubs().then(() => { navigateTo('posiciones'); fetchLastSync(); initSearch(); });
+    } catch { errEl.textContent = 'Error de red'; errEl.style.display = 'block'; }
+    finally { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="ri-login-circle-line"></i> Ingresar'; }
+}
+
+async function handleLogout() {
+    if (authToken) {
+        try { await fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` } }); } catch {}
+    }
+    authToken = null; currentUser = null;
+    localStorage.removeItem('cta_auth_token');
+    const nameEl = document.getElementById('userNameLabel');
+    if (nameEl) nameEl.textContent = '–';
+    const navAdmin = document.getElementById('navItemAdmin');
+    if (navAdmin) navAdmin.style.display = 'none';
+    navigateTo('posiciones');
+}
+
 // ─────────────────────────────────────────────
 // NOMBRES COMPLETOS DE EQUIPOS
 // TACA → clubsMap["TAC"] + " A" = "Club Tachira A"
@@ -51,11 +161,10 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
-    // Carga inicial
-    loadClubs().then(() => {
-        navigateTo('posiciones');
-        fetchLastSync();
-        initSearch();
+    // Restaurar sesión silenciosamente y cargar la app siempre
+    checkAuth().then(() => {
+        _applyAuthState();
+        loadClubs().then(() => { navigateTo('posiciones'); fetchLastSync(); initSearch(); });
     });
 });
 
@@ -106,8 +215,14 @@ function renderSearchResults(query) {
     const bar = document.getElementById('searchBar');
     if (!bar) return;
 
-    const teamResults   = cachedTeams.filter(t => expandTeamName(t.name).toLowerCase().includes(q) || t.name.toLowerCase().includes(q)).slice(0, 5);
-    const playerResults = cachedPlayers.filter(p => p.name.toLowerCase().includes(q)).slice(0, 5);
+    const words = q.split(/\s+/).filter(w => w.length > 0);
+    const matchesAll = (text) => {
+        const t = text.toLowerCase();
+        return words.every(w => t.includes(w));
+    };
+
+    const teamResults   = cachedTeams.filter(t => matchesAll(expandTeamName(t.name)) || matchesAll(t.name)).slice(0, 20);
+    const playerResults = cachedPlayers.filter(p => matchesAll(p.name)).slice(0, 20);
 
     let html = '';
 
@@ -127,7 +242,7 @@ function renderSearchResults(query) {
                     <div class="search-result-name">${highlightMatch(fullName, query)}${t.categoria_name ? ` <span class="cat-badge cat-${t.categoria_name}">${t.categoria_name}</span>` : ''}</div>
                     <div class="search-result-sub">${isOwn ? 'Tu equipo' : 'Equipo rival'}</div>
                 </div>
-                <span class="search-result-action">${isOwn ? 'Ver →' : 'Predecir →'}</span>
+                <span class="search-result-action">Ver →</span>
             </div>`;
         });
     }
@@ -156,48 +271,26 @@ function renderSearchResults(query) {
 }
 
 function highlightMatch(text, query) {
-    const idx = text.toLowerCase().indexOf(query.toLowerCase());
-    if (idx === -1) return text;
-    return text.slice(0, idx)
-        + `<strong style="color:var(--accent-blue)">${text.slice(idx, idx + query.length)}</strong>`
-        + text.slice(idx + query.length);
+    if (!query) return text;
+    const words = query.split(/\s+/).filter(w => w.length > 0);
+    let result = text;
+    words.forEach(word => {
+        const regex = new RegExp(`(${word})`, 'gi');
+        result = result.replace(regex, '<strong style="color:var(--accent-blue)">$1</strong>');
+    });
+    return result;
 }
 
 function searchSelectTeam(ctaId, _name, isOwn) {
     closeSearchDropdown();
     document.getElementById('searchInput').value = '';
-
-    if (isOwn) {
-        // Propio equipo → ir a Mi Equipo
-        navigateTo('equipo');
-    } else {
-        // Rival → ir a Predictor con ese equipo pre-seleccionado
-        navigateTo('predictor');
-        // Esperar a que fetchRivalTeams() termine y luego seleccionar
-        const trySelect = setInterval(() => {
-            const select = document.getElementById('rivalSelect');
-            if (!select) return;
-            const opt = Array.from(select.options).find(o => o.value == ctaId);
-            if (opt) {
-                select.value = ctaId;
-                clearInterval(trySelect);
-            }
-        }, 100);
-        setTimeout(() => clearInterval(trySelect), 3000);
-    }
+    showTeamDetailView(ctaId, _name);
 }
 
 function searchSelectPlayer(playerCtaId) {
     closeSearchDropdown();
     document.getElementById('searchInput').value = '';
-    // Por ahora: navega a Mi Equipo si es jugador propio, o muestra info básica
-    const player = cachedPlayers.find(p => p.cta_id === playerCtaId);
-    if (!player) return;
-    if (player.team_cta_id === (ownTeamId || 7361)) {
-        navigateTo('equipo');
-    } else {
-        searchSelectTeam(player.team_cta_id, player.team_name, false);
-    }
+    openPlayerModal(playerCtaId);
 }
 
 function closeSearchDropdown() {
@@ -220,15 +313,21 @@ function navigateTo(viewId) {
     if (view) view.classList.add('active');
 
     // Cargar datos según vista
-    if (viewId === 'equipo')         fetchTeamData();
-    else if (viewId === 'posiciones') {
+    if (viewId === 'posiciones') {
         initCategoryTabs();
         // Ocultar group-tabs y cargar tabla global (Todas) al entrar
         const groupTabs = document.getElementById('groupTabs');
         if (groupTabs) groupTabs.style.display = 'none';
         fetchTeamRankings(null);
     }
-    else if (viewId === 'predictor') fetchRivalTeams();
+    else if (viewId === 'predictor') {
+        if (!currentUser) { showLoginOverlay(); return; }
+        fetchRivalTeams();
+    }
+    else if (viewId === 'admin') {
+        if (!currentUser?.is_admin) { navigateTo('posiciones'); return; }
+        loadAdminUsers();
+    }
     else if (viewId === 'refuerzos') initRefuerzosView();
     // team-detail se carga desde showTeamDetailView, no aquí
 }
@@ -468,7 +567,8 @@ function startSSE(url, btnId, btnIdleHTML, title) {
     openLogPanel(title);
 
     if (_activeSSE) _activeSSE.close();
-    const es = new EventSource(`${API_BASE}${url}`);
+    const sep = url.includes('?') ? '&' : '?';
+    const es = new EventSource(`${API_BASE}${url}${sep}token=${encodeURIComponent(authToken || '')}`);
     _activeSSE = es;
 
     es.onmessage = (e) => {
@@ -521,6 +621,7 @@ function startSSE(url, btnId, btnIdleHTML, title) {
 // SINCRONIZACIÓN
 // ─────────────────────────────────────────────
 function syncData() {
+    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
     startSSE(
         '/api/sync/stream',
         'syncBtn',
@@ -530,6 +631,7 @@ function syncData() {
 }
 
 function groupSync() {
+    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
     startSSE(
         '/api/group/stream',
         'groupBtn',
@@ -539,6 +641,7 @@ function groupSync() {
 }
 
 function crawlFull() {
+    if (!currentUser?.is_admin) { showLoginOverlay(); return; }
     startSSE(
         '/api/crawl/stream',
         'crawlBtn',
@@ -562,14 +665,8 @@ async function fetchLastSync() {
         const res = await fetch(`${API_BASE}/api/last-sync`);
         const data = await res.json();
         if (data.last_sync) {
-            const formatted = formatCaracasTime(data.last_sync);
-            const status = document.getElementById('syncStatus');
-            if (!status.textContent || status.className === 'sync-status muted') {
-                status.textContent = `Datos: ${formatted}`;
-                status.className = 'sync-status muted';
-            }
             const badge = document.getElementById('standingsLastSync');
-            if (badge) badge.textContent = `Actualizado: ${formatted}`;
+            if (badge) badge.textContent = `Actualizado: ${formatCaracasTime(data.last_sync)}`;
         }
     } catch (e) { /* silencioso */ }
 }
@@ -676,17 +773,6 @@ async function fetchDashboardData() {
         // Guardar ID del equipo propio (fuente única de verdad)
         if (data.team_cta_id) ownTeamId = data.team_cta_id;
 
-        // Nombres y subtítulos dinámicos
-        const teamFullName = expandTeamName(data.team_name) || 'Mi Equipo';
-        const catName = data.categoria_name || '';
-        const ligaId  = data.liga_id || 32;
-
-        document.getElementById('userNameLabel').textContent = teamFullName;
-        const roleEl = document.getElementById('userRoleLabel');
-        if (roleEl) roleEl.textContent = `Liga ${ligaId} / Cat ${catName}`;
-
-        const equipoSub = document.getElementById('equipoSubtitle');
-        if (equipoSub) equipoSub.textContent = `Liga ${ligaId} · ${catName} · Temporada Actual`;
 
         if (data.data_missing) {
             document.getElementById('valPosition').textContent = '–';
@@ -849,68 +935,7 @@ function renderChart(matches) {
     });
 }
 
-// ─────────────────────────────────────────────
-// VISTA: MI EQUIPO
-// ─────────────────────────────────────────────
-async function fetchTeamData() {
-    const teamId = ownTeamId || 7361;
-    const roster = document.getElementById('playerRoster');
-    const quickStats = document.getElementById('teamQuickStats');
-    roster.innerHTML = '<div class="loading-spinner"></div>';
-    quickStats.innerHTML = '<div class="loading-inline"></div>';
-
-    try {
-        const [teamRes, dashRes, capRes] = await Promise.all([
-            fetch(`${API_BASE}/api/team/${teamId}`),
-            fetch(`${API_BASE}/api/dashboard`),
-            fetch(`${API_BASE}/api/team/${teamId}/captains`),
-        ]);
-        const teamData = await teamRes.json();
-        const dash = await dashRes.json();
-        const captains = capRes.ok ? await capRes.json() : null;
-
-        document.getElementById('teamNameHeading').textContent =
-            expandTeamName(teamData.team?.name) || 'Mi Equipo';
-        document.getElementById('playerCount').textContent =
-            `${teamData.players?.length ?? 0} jugadores`;
-
-        const t = teamData.team || {};
-        const pAve = t.p_ave !== null && t.p_ave !== undefined ? Number(t.p_ave).toFixed(3) : null;
-        const setAve = t.set_ave !== null && t.set_ave !== undefined ? Number(t.set_ave).toFixed(3) : null;
-
-        if (!dash.error) {
-            quickStats.innerHTML = `
-                <div class="quick-stat">
-                    <span class="qs-value">#${dash.position}</span>
-                    <span class="qs-label">Posición</span>
-                </div>
-                <div class="quick-stat">
-                    <span class="qs-value">${dash.points}</span>
-                    <span class="qs-label">Puntos</span>
-                </div>
-                <div class="quick-stat">
-                    <span class="qs-value">${dash.win_rate}%</span>
-                    <span class="qs-label">% Victorias</span>
-                </div>
-                <div class="quick-stat">
-                    <span class="qs-value">${dash.matches_played}</span>
-                    <span class="qs-label">Partidos</span>
-                </div>
-                ${pAve ? `<div class="quick-stat"><span class="qs-value">${pAve}</span><span class="qs-label">P Ave</span></div>` : ''}
-                ${setAve ? `<div class="quick-stat"><span class="qs-value">${setAve}</span><span class="qs-label">Set Ave</span></div>` : ''}
-            `;
-        } else {
-            quickStats.innerHTML = '';
-        }
-
-        renderTeamMetaCard(t, captains);
-        renderPlayerRoster(teamData.players || []);
-
-    } catch (e) {
-        roster.innerHTML = '<p class="text-muted">Error al cargar el equipo.</p>';
-        console.error("Error al cargar equipo:", e);
-    }
-}
+// VISTA: MI EQUIPO eliminada (usar showTeamDetailView)
 
 function renderTeamMetaCard(team, captains, hostId = 'teamMetaCard') {
     const host = document.getElementById(hostId);
@@ -1366,11 +1391,10 @@ function renderPlayerModal(data) {
         const resLabel = h.result === 'W' ? 'G' : h.result === 'L' ? 'P' : h.result || '?';
         const refIcon = h.is_refuerzo ? `<span class="ref-badge" title="Refuerzo">💪</span>` : '';
         const tempCat = [h.season, h.category_match].filter(Boolean).join(' · ');
-        const clubChip = h.club ? `<span class="hist-club">${h.club}</span>` : '';
-        const vsClubChip = h.vs_club ? `<span class="hist-vs-club">${h.vs_club}</span>` : '';
-        const rankAfter = (h.ranking_after !== null && h.ranking_after !== undefined)
-            ? `<span class="hist-rank-after">${Number(h.ranking_after).toFixed(2)}</span>` : '';
-        const partner = h.partner_name ? `<small class="hist-partner">+ ${h.partner_name}</small>` : '';
+        const clubChip = h.club ? `<span class="hist-club">${h.club}</span>` : `<span class="hist-empty-col">—</span>`;
+        const vsClubChip = h.vs_club ? `<span class="hist-vs-club">${h.vs_club}</span>` : `<span class="hist-empty-col">—</span>`;
+        const rankAfter = `<span class="hist-rank-after">${(h.ranking_after !== null && h.ranking_after !== undefined) ? Number(h.ranking_after).toFixed(2) : '—'}</span>`;
+        const partner = h.partner_name ? `<div class="hist-partner"><i class="ri-user-follow-line"></i> ${h.partner_name}</div>` : '';
         return `
         <div class="history-row-pmh ${h.is_refuerzo ? 'is-refuerzo' : ''}">
             <span class="hist-jor">${h.jornada || '—'} ${refIcon}</span>
@@ -1921,7 +1945,7 @@ async function fetchTeamRankings(categoria = null) {
         <div class="classification-wrapper">
             <div class="table-section">
                 <div class="table-header-actions">
-                    <h3 style="margin: 0;">Tabla Completa</h3>
+                    <h3 style="margin: 0;">Tabla Completa Todos Los Equipos CTA</h3>
                     <button class="share-btn" onclick="shareClassificationWhatsApp()">
                         <i class="ri-share-forward-line"></i> Compartir
                     </button>
@@ -1976,4 +2000,105 @@ function shareClassificationWhatsApp() {
 
     const encoded = encodeURIComponent(rows.join('\n'));
     window.open(`https://wa.me/?text=${encoded}`, '_blank');
+}
+
+// ─────────────────────────────────────────────
+// ADMIN: Gestión de usuarios
+// ─────────────────────────────────────────────
+
+async function loadAdminUsers() {
+    const container = document.getElementById('usersTable');
+    const countEl   = document.getElementById('usersCount');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-spinner"></div>';
+    try {
+        const res   = await authFetch('/api/admin/users');
+        const data  = await res.json();
+        const users = data.users || [];
+        if (countEl) countEl.textContent = `${users.length}`;
+        if (!users.length) { container.innerHTML = '<p class="empty-state-msg">Sin usuarios.</p>'; return; }
+        container.innerHTML = `
+        <table class="standings-table"><thead><tr>
+            <th>#</th><th>Usuario</th><th>Rol</th><th>Creado</th><th></th>
+        </tr></thead><tbody>
+        ${users.map(u => `<tr>
+            <td>${u.id}</td>
+            <td><strong>${u.username}</strong></td>
+            <td><span class="cat-badge ${u.is_admin ? 'cat-admin' : 'cat-user'}">${u.is_admin ? 'Admin' : 'Usuario'}</span></td>
+            <td>${(u.created_at || '').slice(0, 10)}</td>
+            <td class="admin-actions">
+                <button class="secondary-btn small" onclick="openEditUserModal(${u.id},'${u.username.replace(/'/g, "\\'")}',${u.is_admin})"><i class="ri-edit-line"></i></button>
+                ${u.username !== 'admin' ? `<button class="icon-btn danger-btn small" onclick="deleteUser(${u.id},'${u.username.replace(/'/g, "\\'")}')"><i class="ri-delete-bin-line"></i></button>` : ''}
+            </td>
+        </tr>`).join('')}
+        </tbody></table>`;
+    } catch { container.innerHTML = '<p class="empty-state-msg">Error al cargar.</p>'; }
+}
+
+function openCreateUserModal() {
+    document.getElementById('userModalTitle').textContent = 'Nuevo Usuario';
+    document.getElementById('editUserId').value = '';
+    document.getElementById('editUsername').value = '';
+    document.getElementById('editPassword').value = '';
+    document.getElementById('editIsAdmin').checked = false;
+    document.getElementById('editPasswordHint').style.display = 'none';
+    document.getElementById('userModalError').style.display = 'none';
+    document.getElementById('userModal').style.display = 'flex';
+}
+
+function openEditUserModal(id, username, isAdmin) {
+    document.getElementById('userModalTitle').textContent = 'Editar Usuario';
+    document.getElementById('editUserId').value = id;
+    document.getElementById('editUsername').value = username;
+    document.getElementById('editPassword').value = '';
+    document.getElementById('editIsAdmin').checked = !!isAdmin;
+    document.getElementById('editPasswordHint').style.display = 'inline';
+    document.getElementById('userModalError').style.display = 'none';
+    document.getElementById('userModal').style.display = 'flex';
+}
+
+function closeUserModal(event) {
+    if (event && event.target !== document.getElementById('userModal')) return;
+    document.getElementById('userModal').style.display = 'none';
+}
+
+async function submitUserModal(event) {
+    event.preventDefault();
+    const id       = document.getElementById('editUserId').value;
+    const username = document.getElementById('editUsername').value.trim();
+    const password = document.getElementById('editPassword').value;
+    const isAdmin  = document.getElementById('editIsAdmin').checked;
+    const errEl    = document.getElementById('userModalError');
+    errEl.style.display = 'none';
+    try {
+        let res;
+        if (!id) {
+            if (!password) { errEl.textContent = 'Contraseña obligatoria'; errEl.style.display = 'block'; return; }
+            res = await authFetch('/api/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, is_admin: isAdmin }),
+            });
+        } else {
+            const body = { username, is_admin: isAdmin };
+            if (password) body.password = password;
+            res = await authFetch(`/api/admin/users/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        }
+        if (!res.ok) { const d = await res.json(); errEl.textContent = d.detail || 'Error'; errEl.style.display = 'block'; return; }
+        document.getElementById('userModal').style.display = 'none';
+        loadAdminUsers();
+    } catch { errEl.textContent = 'Error de red'; errEl.style.display = 'block'; }
+}
+
+async function deleteUser(id, username) {
+    if (!confirm(`¿Eliminar usuario "${username}"?`)) return;
+    try {
+        const res = await authFetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+        if (!res.ok) { const d = await res.json(); alert(d.detail || 'Error'); return; }
+        loadAdminUsers();
+    } catch { alert('Error de red'); }
 }

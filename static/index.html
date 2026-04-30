@@ -17,15 +17,15 @@
         <aside class="sidebar">
             <div class="logo">
                 <div class="logo-icon"><i class="ri-tennis-ball-fill"></i></div>
-                <h2>CTA Monitor</h2>
+                <div class="logo-text">
+                    <h2>CTA Monitor</h2>
+                    <span class="logo-version">Version Beta 1.0 <br> Desarrollado por JDM</span>
+                </div>
             </div>
 
             <nav class="nav-menu">
                 <a href="#" class="nav-item active" data-view="posiciones">
                     <i class="ri-trophy-line"></i> <span>Posiciones</span>
-                </a>
-                <a href="#" class="nav-item" data-view="equipo">
-                    <i class="ri-group-line"></i> <span>Mi Equipo</span>
                 </a>
                 <a href="#" class="nav-item" data-view="predictor">
                     <i class="ri-magic-line"></i> <span>Predictor de Draw</span>
@@ -33,14 +33,20 @@
                 <a href="#" class="nav-item" data-view="refuerzos">
                     <i class="ri-star-line"></i> <span>Refuerzos</span>
                 </a>
+                <a href="#" class="nav-item" data-view="admin" id="navItemAdmin" style="display:none;">
+                    <i class="ri-shield-keyhole-line"></i> <span>Administración</span>
+                </a>
             </nav>
 
-            <div class="user-profile">
-                <div class="avatar"><i class="ri-user-smile-line"></i></div>
+            <div class="user-profile" id="userProfileArea">
+                <div class="avatar" id="userAvatar"><i class="ri-user-smile-line"></i></div>
                 <div class="user-info">
-                    <span class="user-name" id="userNameLabel">Cargando...</span>
-                    <span class="user-role" id="userRoleLabel">Liga 32 / Cat 6</span>
+                    <span class="user-name" id="userNameLabel">–</span>
+                    <span class="user-role" id="userRoleLabel"></span>
                 </div>
+                <button class="icon-btn logout-btn" id="logoutBtn" onclick="handleLogout()" title="Cerrar sesión" style="display:none;">
+                    <i class="ri-logout-box-r-line"></i>
+                </button>
             </div>
         </aside>
 
@@ -57,57 +63,11 @@
                     <input type="text" placeholder="Buscar equipos, jugadores..." id="searchInput" autocomplete="off">
                 </div>
                 <div class="topbar-actions">
-                    <span class="sync-status" id="syncStatus"></span>
                     <button class="icon-btn" id="bellBtn" onclick="toggleNotifications()"><i class="ri-notification-3-line"></i><span class="badge"></span></button>
-                    <button class="icon-btn primary-btn" id="syncBtn" onclick="syncData()">
-                        <i class="ri-refresh-line"></i> Sincronizar
-                    </button>
-                    <button class="icon-btn group-btn" id="groupBtn" onclick="groupSync()" title="Actualiza posiciones y calendario del grupo (~5 seg)">
-                        <i class="ri-calendar-check-line"></i> Actualizar Grupo
-                    </button>
-                    <button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Descarga todos los equipos y jugadores (~5 min)">
-                        <i class="ri-database-2-line"></i> Crawl Completo
-                    </button>
                 </div>
             </header>
 
-            <!-- ─────────── VISTA: MI EQUIPO ─────────── -->
-            <div id="view-equipo" class="view-section">
-                <div class="content-grid">
-
-                    <section class="page-header-section">
-                        <div class="glass-panel page-header-card">
-                            <div class="page-header-info">
-                                <div class="page-icon purple"><i class="ri-group-fill"></i></div>
-                                <div>
-                                    <h2 id="teamNameHeading">Mi Equipo</h2>
-                                    <p class="page-subtitle" id="equipoSubtitle">Liga 32 · Categoría 6</p>
-                                </div>
-                            </div>
-                            <div class="team-quick-stats" id="teamQuickStats">
-                                <div class="loading-inline"></div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <section class="full-width-section">
-                        <div id="teamMetaCard"></div>
-                    </section>
-
-                    <section class="full-width-section">
-                        <div class="glass-panel">
-                            <div class="panel-header">
-                                <h3>Nómina de Jugadores</h3>
-                                <span class="badge-count" id="playerCount">cargando...</span>
-                            </div>
-                            <div id="playerRoster" class="player-roster">
-                                <div class="loading-spinner"></div>
-                            </div>
-                        </div>
-                    </section>
-
-                </div>
-            </div><!-- /view-equipo -->
+            <!-- ... existing views ... -->
 
             <!-- ─────────── VISTA: POSICIONES ─────────── -->
             <div id="view-posiciones" class="view-section active">
@@ -115,13 +75,10 @@
 
                     <section class="page-header-section">
                         <div class="glass-panel page-header-card">
-                            <div class="page-header-info">
-                                <div class="page-icon green"><i class="ri-medal-fill"></i></div>
                                 <div>
                                     <h2>Clasificación de Equipos</h2>
-                                    <p class="page-subtitle" id="posicionesSubtitle">Liga 32 · Categoría 6 · Temporada Actual</p>
                                 </div>
-                            </div>
+
                             <span class="sync-badge" id="standingsLastSync">--</span>
                         </div>
                     </section>
@@ -284,6 +241,57 @@
                 </div>
             </div><!-- /view-refuerzos -->
 
+            <!-- ─────────── VISTA: ADMINISTRACIÓN ─────────── -->
+            <div id="view-admin" class="view-section">
+                <div class="content-grid">
+                    <section class="page-header-section">
+                        <div class="glass-panel page-header-card">
+                            <div class="page-header-info">
+                                <div class="page-icon" style="background:linear-gradient(135deg,var(--accent-purple),#7c3aed)">
+                                    <i class="ri-shield-keyhole-fill"></i>
+                                </div>
+                                <div>
+                                    <h2>Administración</h2>
+                                    <p class="page-subtitle">Gestión de usuarios y sincronización</p>
+                                </div>
+                            </div>
+                            <button class="primary-btn" onclick="openCreateUserModal()">
+                                <i class="ri-user-add-line"></i> Nuevo Usuario
+                            </button>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Acciones de Datos</h3>
+                            </div>
+                            <div class="admin-actions-grid">
+                                <button class="icon-btn primary-btn" id="syncBtn" onclick="syncData()">
+                                    <i class="ri-refresh-line"></i> Sincronizar
+                                </button>
+                                <button class="icon-btn group-btn" id="groupBtn" onclick="groupSync()" title="Actualiza posiciones y calendario del grupo (~5 seg)">
+                                    <i class="ri-calendar-check-line"></i> Actualizar Grupo
+                                </button>
+                                <button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Descarga todos los equipos y jugadores (~5 min)">
+                                    <i class="ri-database-2-line"></i> Crawl Completo
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Usuarios</h3>
+                                <span class="badge-count" id="usersCount">–</span>
+                            </div>
+                            <div id="usersTable"><div class="loading-spinner"></div></div>
+                        </div>
+                    </section>
+                </div>
+            </div><!-- /view-admin -->
+
         </main>
     </div>
 
@@ -308,6 +316,57 @@
         <div class="modal-card" onclick="event.stopPropagation()">
             <button class="modal-close" onclick="closePlayerModal()"><i class="ri-close-line"></i></button>
             <div id="playerModalContent"><div class="loading-spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- MODAL: Crear/Editar usuario -->
+    <div id="userModal" class="modal-overlay" onclick="closeUserModal(event)" style="display:none;">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeUserModal()"><i class="ri-close-line"></i></button>
+            <h3 id="userModalTitle">Nuevo Usuario</h3>
+            <form id="userModalForm" onsubmit="submitUserModal(event)" style="margin-top:16px;">
+                <input type="hidden" id="editUserId">
+                <div class="login-field">
+                    <label>Usuario</label>
+                    <input type="text" id="editUsername" required>
+                </div>
+                <div class="login-field">
+                    <label>Contraseña <span id="editPasswordHint" style="font-size:11px;color:var(--text-muted);display:none;">(vacío = no cambiar)</span></label>
+                    <input type="password" id="editPassword">
+                </div>
+                <div class="login-field" style="flex-direction:row;align-items:center;gap:10px;">
+                    <input type="checkbox" id="editIsAdmin">
+                    <label for="editIsAdmin" style="margin:0;">Es administrador</label>
+                </div>
+                <p id="userModalError" class="login-error" style="display:none;"></p>
+                <button type="submit" class="primary-btn login-submit-btn">Guardar</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ═══════ OVERLAY: LOGIN ═══════ -->
+    <div id="loginOverlay" class="login-overlay" style="display:none;">
+        <div class="login-card glass-panel">
+            <div class="login-header">
+                <div class="logo-icon" style="margin:0 auto 16px;"><i class="ri-tennis-ball-fill"></i></div>
+                <h2>CTA Monitor</h2>
+                <p class="login-subtitle">Acceso al sistema</p>
+            </div>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="login-field">
+                    <label>Usuario</label>
+                    <input type="text" id="loginUsername" autocomplete="username" required>
+                </div>
+                <div class="login-field">
+                    <label>Contraseña</label>
+                    <input type="password" id="loginPassword" autocomplete="current-password" required>
+                </div>
+                <p id="loginError" class="login-error" style="display:none;"></p>
+                <button type="submit" class="primary-btn login-submit-btn" id="loginSubmitBtn">
+                    <i class="ri-login-circle-line"></i> Ingresar
+                </button>
+                <button type="button" class="login-cancel-btn" onclick="hideLoginOverlay()">Cancelar</button>
+            </form>
         </div>
     </div>
 
