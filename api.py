@@ -54,8 +54,8 @@ def get_current_user(token: Optional[str] = Depends(_resolve_token)) -> dict:
 
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    if not user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="Se requiere rol admin")
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol Administrador")
     return user
 
 
@@ -67,13 +67,13 @@ class LoginRequest(BaseModel):
 class CreateUserRequest(BaseModel):
     username: str
     password: str
-    is_admin: bool = False
+    role: str = "capitania"
 
 
 class UpdateUserRequest(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
-    is_admin: Optional[bool] = None
+    role: Optional[str] = None
 
 
 # ─────────────────────────────────────────────
@@ -88,13 +88,13 @@ def login(body: LoginRequest):
     token = database.create_session(user["id"])
     return {
         "token": token,
-        "user": {"id": user["id"], "username": user["username"], "is_admin": bool(user["is_admin"])},
+        "user": {"id": user["id"], "username": user["username"], "role": user["role"]},
     }
 
 
 @app.get("/api/auth/me")
 def auth_me(user: dict = Depends(get_current_user)):
-    return {"id": user["id"], "username": user["username"], "is_admin": bool(user["is_admin"])}
+    return {"id": user["id"], "username": user["username"], "role": user.get("role", "capitania")}
 
 
 @app.post("/api/auth/logout")
@@ -116,7 +116,7 @@ def admin_list_users(_: dict = Depends(require_admin)):
 @app.post("/api/admin/users")
 def admin_create_user(body: CreateUserRequest, _: dict = Depends(require_admin)):
     try:
-        return {"user": database.create_user(body.username, body.password, body.is_admin)}
+        return {"user": database.create_user(body.username, body.password, body.role)}
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -125,7 +125,7 @@ def admin_create_user(body: CreateUserRequest, _: dict = Depends(require_admin))
 def admin_update_user(user_id: int, body: UpdateUserRequest, _: dict = Depends(require_admin)):
     if not database.get_user_by_id(user_id):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    database.update_user(user_id, body.username, body.password, body.is_admin)
+    database.update_user(user_id, body.username, body.password, body.role)
     return {"ok": True}
 
 

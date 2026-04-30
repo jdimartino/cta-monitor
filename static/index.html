@@ -334,9 +334,12 @@
                     <label>Contraseña <span id="editPasswordHint" style="font-size:11px;color:var(--text-muted);display:none;">(vacío = no cambiar)</span></label>
                     <input type="password" id="editPassword">
                 </div>
-                <div class="login-field" style="flex-direction:row;align-items:center;gap:10px;">
-                    <input type="checkbox" id="editIsAdmin">
-                    <label for="editIsAdmin" style="margin:0;">Es administrador</label>
+                <div class="login-field">
+                    <label>Rol</label>
+                    <select id="editRole" style="width:100%;padding:12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border-color);color:white;">
+                        <option value="capitania">Capitanía (Solo Predictor)</option>
+                        <option value="admin">Administrador (Todo)</option>
+                    </select>
                 </div>
                 <p id="userModalError" class="login-error" style="display:none;"></p>
                 <button type="submit" class="primary-btn login-submit-btn">Guardar</button>

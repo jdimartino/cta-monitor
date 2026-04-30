@@ -67,10 +67,14 @@ function _applyAuthState() {
     if (currentUser) {
         // ── Logueado ──
         if (nameEl)    nameEl.textContent = currentUser.username;
-        if (roleEl)    roleEl.innerHTML   = currentUser.is_admin ? 'Administrador' : 'Usuario';
+        if (roleEl) {
+            const roleLabel = currentUser.role === 'admin' ? 'Administrador' : 'Capitanía';
+            roleEl.innerHTML = roleLabel;
+        }
         if (avatarEl)  { avatarEl.innerHTML = '<i class="ri-user-smile-line"></i>'; avatarEl.style.opacity = '1'; }
         if (logoutBtn) logoutBtn.style.display = 'flex';
-        if (navAdmin)  navAdmin.style.display  = currentUser.is_admin ? 'flex' : 'none';
+        // Solo administradores ven el botón de Admin
+        if (navAdmin)  navAdmin.style.display  = currentUser.role === 'admin' ? 'flex' : 'none';
     } else {
         // ── Invitado ──
         if (nameEl)    nameEl.textContent = 'Invitado';
@@ -115,10 +119,7 @@ async function handleLogout() {
     }
     authToken = null; currentUser = null;
     localStorage.removeItem('cta_auth_token');
-    const nameEl = document.getElementById('userNameLabel');
-    if (nameEl) nameEl.textContent = '–';
-    const navAdmin = document.getElementById('navItemAdmin');
-    if (navAdmin) navAdmin.style.display = 'none';
+    _applyAuthState();
     navigateTo('posiciones');
 }
 
@@ -325,7 +326,7 @@ function navigateTo(viewId) {
         fetchRivalTeams();
     }
     else if (viewId === 'admin') {
-        if (!currentUser?.is_admin) { navigateTo('posiciones'); return; }
+        if (currentUser?.role !== 'admin') { navigateTo('posiciones'); return; }
         loadAdminUsers();
     }
     else if (viewId === 'refuerzos') initRefuerzosView();
@@ -2024,10 +2025,10 @@ async function loadAdminUsers() {
         ${users.map(u => `<tr>
             <td>${u.id}</td>
             <td><strong>${u.username}</strong></td>
-            <td><span class="cat-badge ${u.is_admin ? 'cat-admin' : 'cat-user'}">${u.is_admin ? 'Admin' : 'Usuario'}</span></td>
+            <td><span class="cat-badge ${u.role === 'admin' ? 'cat-admin' : 'cat-user'}">${u.role === 'admin' ? 'Admin' : 'Capitanía'}</span></td>
             <td>${(u.created_at || '').slice(0, 10)}</td>
             <td class="admin-actions">
-                <button class="secondary-btn small" onclick="openEditUserModal(${u.id},'${u.username.replace(/'/g, "\\'")}',${u.is_admin})"><i class="ri-edit-line"></i></button>
+                <button class="secondary-btn small" onclick="openEditUserModal(${u.id},'${u.username.replace(/'/g, "\\'")}', '${u.role}')"><i class="ri-edit-line"></i></button>
                 ${u.username !== 'admin' ? `<button class="icon-btn danger-btn small" onclick="deleteUser(${u.id},'${u.username.replace(/'/g, "\\'")}')"><i class="ri-delete-bin-line"></i></button>` : ''}
             </td>
         </tr>`).join('')}
@@ -2040,18 +2041,18 @@ function openCreateUserModal() {
     document.getElementById('editUserId').value = '';
     document.getElementById('editUsername').value = '';
     document.getElementById('editPassword').value = '';
-    document.getElementById('editIsAdmin').checked = false;
+    document.getElementById('editRole').value = 'capitania';
     document.getElementById('editPasswordHint').style.display = 'none';
     document.getElementById('userModalError').style.display = 'none';
     document.getElementById('userModal').style.display = 'flex';
 }
 
-function openEditUserModal(id, username, isAdmin) {
+function openEditUserModal(id, username, role) {
     document.getElementById('userModalTitle').textContent = 'Editar Usuario';
     document.getElementById('editUserId').value = id;
     document.getElementById('editUsername').value = username;
     document.getElementById('editPassword').value = '';
-    document.getElementById('editIsAdmin').checked = !!isAdmin;
+    document.getElementById('editRole').value = role || 'capitania';
     document.getElementById('editPasswordHint').style.display = 'inline';
     document.getElementById('userModalError').style.display = 'none';
     document.getElementById('userModal').style.display = 'flex';
@@ -2067,7 +2068,7 @@ async function submitUserModal(event) {
     const id       = document.getElementById('editUserId').value;
     const username = document.getElementById('editUsername').value.trim();
     const password = document.getElementById('editPassword').value;
-    const isAdmin  = document.getElementById('editIsAdmin').checked;
+    const role     = document.getElementById('editRole').value;
     const errEl    = document.getElementById('userModalError');
     errEl.style.display = 'none';
     try {
@@ -2077,10 +2078,10 @@ async function submitUserModal(event) {
             res = await authFetch('/api/admin/users', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password, is_admin: isAdmin }),
+                body: JSON.stringify({ username, password, role }),
             });
         } else {
-            const body = { username, is_admin: isAdmin };
+            const body = { username, role };
             if (password) body.password = password;
             res = await authFetch(`/api/admin/users/${id}`, {
                 method: 'PUT',

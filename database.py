@@ -127,9 +127,13 @@ def migrate_schema():
             password_hash TEXT NOT NULL,
             salt          TEXT NOT NULL,
             is_admin      INTEGER NOT NULL DEFAULT 0,
+            role          TEXT DEFAULT 'capitania',
             created_at    TEXT DEFAULT (datetime('now')),
             updated_at    TEXT DEFAULT (datetime('now'))
         )""",
+        "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'capitania'",
+        "UPDATE users SET role = 'admin' WHERE is_admin = 1",
+        "UPDATE users SET role = 'capitania' WHERE is_admin = 0",
         """CREATE TABLE IF NOT EXISTS sessions (
             token      TEXT PRIMARY KEY,
             user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1318,7 +1322,7 @@ def get_session_user(token: str | None) -> dict | None:
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT u.* FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?",
+            "SELECT u.id, u.username, u.is_admin, u.role FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=? AND s.expires_at>?",
             (token, now),
         ).fetchone()
     return dict(row) if row else None
@@ -1332,7 +1336,7 @@ def delete_session(token: str):
 def get_all_users() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, username, is_admin, created_at, updated_at FROM users ORDER BY id"
+            "SELECT id, username, is_admin, role, created_at, updated_at FROM users ORDER BY id"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1340,21 +1344,22 @@ def get_all_users() -> list[dict]:
 def get_user_by_id(user_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id, username, is_admin, created_at FROM users WHERE id=?", (user_id,)
+            "SELECT id, username, is_admin, role, created_at FROM users WHERE id=?", (user_id,)
         ).fetchone()
     return dict(row) if row else None
 
 
-def create_user(username: str, password: str, is_admin: bool = False) -> dict:
+def create_user(username: str, password: str, role: str = 'capitania') -> dict:
     salt = secrets.token_hex(32)
+    is_admin = 1 if role == 'admin' else 0
     with get_connection() as conn:
         try:
             conn.execute(
-                "INSERT INTO users (username, password_hash, salt, is_admin) VALUES (?,?,?,?)",
-                (username, _hash_password(password, salt), salt, 1 if is_admin else 0),
+                "INSERT INTO users (username, password_hash, salt, is_admin, role) VALUES (?,?,?,?,?)",
+                (username, _hash_password(password, salt), salt, is_admin, role),
             )
             row = conn.execute(
-                "SELECT id, username, is_admin, created_at FROM users WHERE username=?", (username,)
+                "SELECT id, username, is_admin, role, created_at FROM users WHERE username=?", (username,)
             ).fetchone()
             return dict(row)
         except Exception as exc:
@@ -1362,7 +1367,7 @@ def create_user(username: str, password: str, is_admin: bool = False) -> dict:
 
 
 def update_user(user_id: int, username: str | None = None,
-                password: str | None = None, is_admin: bool | None = None):
+                password: str | None = None, role: str | None = None):
     with get_connection() as conn:
         if username is not None:
             conn.execute(
@@ -1375,10 +1380,11 @@ def update_user(user_id: int, username: str | None = None,
                 "UPDATE users SET password_hash=?, salt=?, updated_at=datetime('now') WHERE id=?",
                 (_hash_password(password, salt), salt, user_id),
             )
-        if is_admin is not None:
+        if role is not None:
+            is_admin = 1 if role == 'admin' else 0
             conn.execute(
-                "UPDATE users SET is_admin=?, updated_at=datetime('now') WHERE id=?",
-                (1 if is_admin else 0, user_id),
+                "UPDATE users SET role=?, is_admin=?, updated_at=datetime('now') WHERE id=?",
+                (role, is_admin, user_id),
             )
 
 
