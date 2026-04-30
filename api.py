@@ -140,9 +140,30 @@ def admin_delete_user(user_id: int, _: dict = Depends(require_admin)):
     return {"ok": True}
 
 
+import time
+from fastapi.responses import HTMLResponse
+
+APP_VERSION = str(int(time.time()))
+
 @app.get("/")
 def serve_index():
-    return FileResponse("static/index.html")
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        html = f.read()
+    
+    # Inyectar version param para evitar caché de Cloudflare/Navegador en archivos locales
+    html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={APP_VERSION}"')
+    html = html.replace('href="/static/draw_predictor.css"', f'href="/static/draw_predictor.css?v={APP_VERSION}"')
+    html = html.replace('src="/static/app.js"', f'src="/static/app.js?v={APP_VERSION}"')
+    html = html.replace('src="/static/draw_predictor.js"', f'src="/static/draw_predictor.js?v={APP_VERSION}"')
+    
+    return HTMLResponse(
+        content=html, 
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 @app.on_event("startup")
 def startup_event():
