@@ -837,6 +837,16 @@ body {
 ───────────────────────────────────────────── */
 .standings-table-wrap {
     overflow-x: auto;
+    /* Sombras para indicar scroll horizontal */
+    background:
+        linear-gradient(to right, var(--bg-card) 30%, rgba(255,255,255,0)),
+        linear-gradient(to left, var(--bg-card) 30%, rgba(255,255,255,0)) 100% 0,
+        radial-gradient(farthest-side at 0 50%, rgba(0,0,0,0.2), rgba(0,0,0,0)),
+        radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,0.2), rgba(0,0,0,0)) 100% 0;
+    background-repeat: no-repeat;
+    background-color: var(--bg-card);
+    background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
+    background-attachment: local, local, scroll, scroll;
 }
 .standings-table {
     width: 100%;
@@ -1116,6 +1126,7 @@ body {
     padding: 1px 6px;
     border-radius: 10px;
     margin-right: 5px;
+    margin-left: 5px;
     vertical-align: middle;
     background: rgba(0,228,255,0.12);
     color: var(--accent-blue);
@@ -2375,9 +2386,15 @@ body {
 
     .hamburger-btn { display: flex; }
 
-    /* Topbar: search bar flexible */
-    .topbar { padding: 12px 16px; gap: 8px; }
-    .search-bar { width: auto; flex: 1; min-width: 0; }
+    /* Topbar: search bar flexible pero con espacio para botones */
+    .topbar { padding: 12px 14px; gap: 8px; justify-content: space-between; }
+    .search-bar { width: auto; flex: 1; min-width: 0; max-width: 60%; }
+    
+    /* Touch targets mínimos de 44px para móviles (Accesibilidad) */
+    .hamburger-btn, .topbar-actions .icon-btn, .logout-btn {
+        width: 44px; height: 44px;
+        display: flex; align-items: center; justify-content: center;
+    }
     .topbar-actions .sync-status { display: none; }
     #syncBtn span, #groupBtn span, #crawlBtn span { display: none; }
 
@@ -2514,6 +2531,34 @@ body {
     font-size: 18px;
 }
 
+/* ─────────────────────────────────────────────
+   ADMIN: Panel de errores del crawl
+───────────────────────────────────────────── */
+.crawl-errors-list { display: flex; flex-direction: column; gap: 8px; }
+
+.crawl-error-item {
+    background: rgba(248,113,113,0.06);
+    border: 1px solid rgba(248,113,113,0.2);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.crawl-error-summary {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; cursor: pointer;
+    font-size: 13px; color: var(--accent-red);
+    list-style: none; user-select: none;
+}
+.crawl-error-summary::-webkit-details-marker { display: none; }
+.crawl-error-summary i { flex-shrink: 0; font-size: 15px; }
+.crawl-error-summary span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crawl-error-item[open] .crawl-error-summary { border-bottom: 1px solid rgba(248,113,113,0.15); }
+.crawl-error-pre {
+    margin: 0; padding: 12px 14px;
+    font-family: 'Courier New', monospace; font-size: 11px;
+    color: var(--text-secondary); white-space: pre-wrap; word-break: break-all;
+    max-height: 260px; overflow-y: auto; background: rgba(0,0,0,0.2);
+}
+
 /* ═══════════════════════════════════════════════
    MOBILE OPTIMIZATION — responsive completo
 ═══════════════════════════════════════════════ */
@@ -2546,6 +2591,9 @@ body {
     .page-header-card > .page-header-actions,
     .page-header-card > .sync-badge {
         width: 100%;
+    }
+    .page-header-card > .primary-btn {
+        padding: 8px 12px; /* Reducir padding en móvil */
     }
     .page-header-info h2 { font-size: 18px; }
     .page-icon { width: 40px; height: 40px; font-size: 18px; }
@@ -2726,3 +2774,39 @@ body {
 }
 .log-clear-btn:hover { color: white; background: rgba(255,255,255,0.1); }
 .log-close-btn:hover { color: var(--accent-red); background: rgba(255,99,132,0.1); }
+
+/* ═══════ MOBILE-FIRST MEJORAS (TASK 2,3,4) ═══════ */
+.cap-links a {
+    font-size: 1.2rem;
+    padding: 6px;
+    margin-left: 8px;
+}
+
+@media (max-width: 640px) {
+    .page-header-actions {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+    }
+    .page-header-actions > select,
+    .page-header-actions > button {
+        width: 100%;
+        max-width: 100%;
+    }
+    
+    .quick-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+    }
+    
+    .cap-links a {
+        font-size: 1.5rem; /* Aumentar targets de contacto */
+        padding: 8px;
+    }
+    
+    .refuerzo-row {
+        font-size: 13px; /* Aumentar fuente base en móvil */
+    }
+}
