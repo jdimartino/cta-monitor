@@ -166,6 +166,7 @@ body {
     flex-direction: column;
     gap: 20px;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
 }
 
@@ -2374,9 +2375,34 @@ body {
 
     .hamburger-btn { display: flex; }
 
+    /* Topbar: search bar flexible */
     .topbar { padding: 12px 16px; gap: 8px; }
+    .search-bar { width: auto; flex: 1; min-width: 0; }
     .topbar-actions .sync-status { display: none; }
     #syncBtn span, #groupBtn span, #crawlBtn span { display: none; }
+
+    /* Main content: padding reducido */
+    .main-content { padding: 12px 12px 12px; gap: 14px; }
+
+    /* Middle section: columna única */
+    .middle-section { grid-template-columns: 1fr; }
+
+    /* Nav items: tap target generoso */
+    .nav-item { min-height: 48px; }
+
+    /* Category y group tabs */
+    .cat-tab  { min-height: 40px; padding: 8px 14px; }
+    .group-tab { min-height: 36px; }
+
+    /* Tablas */
+    .standings-table { font-size: 13px; }
+    .standings-table th, .standings-table td { padding: 11px 8px; }
+
+    /* Labels pequeños: mínimo 12px */
+    .qs-label, .search-group-label, .fixture-vs, .jornada-header { font-size: 12px; }
+
+    /* Log panel */
+    .log-panel.open { max-height: 45vh; }
 }
 
 /* ─────────────────────────────────────────────
@@ -2461,8 +2487,8 @@ body {
     #playerModal .modal-card {
         padding: 1.25rem;
         border-radius: 0;
-        max-height: 100vh;
-        height: 100vh;
+        max-height: 100dvh;
+        height: 100dvh;
         width: 100vw;
     }
 }
@@ -2486,5 +2512,131 @@ body {
 /* Ensure buttons look correct in the grid */
 .admin-actions-grid .icon-btn i {
     font-size: 18px;
+}
+
+/* ═══════════════════════════════════════════════
+   MOBILE OPTIMIZATION — responsive completo
+═══════════════════════════════════════════════ */
+
+/* ─── Category tabs: scroll horizontal sin overflow ─── */
+.category-tabs-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.category-tabs-wrap::-webkit-scrollbar { display: none; }
+.category-tabs { flex-wrap: nowrap; width: max-content; }
+
+/* ─── KPI: 3-col → 2-col → 1-col ─── */
+@media (max-width: 640px) {
+    .kpi-section { grid-template-columns: repeat(2, 1fr); gap: 14px; }
+}
+@media (max-width: 380px) {
+    .kpi-section { grid-template-columns: 1fr; }
+}
+
+/* ─── Page header: stack en móvil ─── */
+@media (max-width: 640px) {
+    .page-header-card {
+        flex-wrap: wrap;
+        padding: 14px 16px;
+        gap: 10px;
+    }
+    .page-header-card > .primary-btn,
+    .page-header-card > .page-header-actions,
+    .page-header-card > .sync-badge {
+        width: 100%;
+    }
+    .page-header-info h2 { font-size: 18px; }
+    .page-icon { width: 40px; height: 40px; font-size: 18px; }
+    .page-subtitle { font-size: 13px; }
+}
+
+/* ─── Glass panel: menos padding en mobile ─── */
+@media (max-width: 480px) {
+    .glass-panel { padding: 14px 14px; border-radius: 18px; }
+}
+
+/* ─── Predictor controls: grid 2×2 + botón full ─── */
+@media (max-width: 640px) {
+    .predictor-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+    .predictor-controls .predict-run-btn {
+        grid-column: 1 / -1;
+        justify-content: center;
+    }
+    .predictor-controls select {
+        max-width: none !important;
+        width: 100%;
+    }
+}
+
+/* ─── Standings: ocultar columnas intermedias ─── */
+@media (max-width: 600px) {
+    /* Oculta SG, SP, GG/GP/%V — preserva Pts (last-child) */
+    .standings-table th:nth-child(n+6):not(:last-child),
+    .standings-table td:nth-child(n+6):not(:last-child) { display: none; }
+    .team-cell { min-width: 120px; }
+}
+@media (max-width: 380px) {
+    /* En teléfonos muy pequeños también ocultar PP */
+    .standings-table th:nth-child(5):not(:last-child),
+    .standings-table td:nth-child(5):not(:last-child) { display: none; }
+    .team-cell { min-width: 100px; }
+}
+
+/* ─── Modal bottom-sheet en móvil ─── */
+@media (max-width: 540px) {
+    .modal-overlay:not(#playerModal) {
+        align-items: flex-end;
+        padding: 0;
+    }
+    .modal-overlay:not(#playerModal) .modal-card {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 24px 24px 0 0;
+        max-height: 90dvh;
+        overflow-y: auto;
+    }
+}
+
+/* ─── Login card: compacto en teléfonos pequeños ─── */
+@media (max-width: 400px) {
+    .login-card { padding: 28px 18px; }
+    .login-header { margin-bottom: 22px; }
+    .login-header h2 { font-size: 20px; }
+}
+
+/* ─── Quick stats del equipo: wrap en móvil ─── */
+@media (max-width: 600px) {
+    .team-quick-stats { flex-wrap: wrap; gap: 10px; }
+    .quick-stat { min-width: calc(50% - 5px); flex: 1; padding: 10px 12px; }
+    .quick-stat { min-width: 70px; }
+}
+
+/* ─── Matchup rows del predictor ─── */
+@media (max-width: 540px) {
+    .matchup-row { flex-direction: column; gap: 10px; padding: 12px; }
+    .matchup-pos { width: auto; text-align: center; }
+}
+
+/* ─── Admin actions grid: full-width en móvil pequeño ─── */
+@media (max-width: 480px) {
+    .admin-actions-grid .icon-btn {
+        min-width: 100%;
+    }
+}
+
+/* ─── Safe area para notch de iPhone ─── */
+@supports (padding: env(safe-area-inset-bottom)) {
+    .main-content {
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+    .sidebar {
+        padding-bottom: max(24px, env(safe-area-inset-bottom));
+    }
 }
 

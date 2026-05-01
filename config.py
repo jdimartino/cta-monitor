@@ -34,6 +34,17 @@ DB_PATH = DATA_DIR / "cta.db"
 SESSION_FILE = DATA_DIR / "session.pkl"
 SESSION_MAX_AGE_HOURS = 4
 
+# ── Admin password (cambiar en .env o se genera una aleatoria) ──
+_ADMIN_PW_ENV = os.getenv("ADMIN_PASSWORD", "")
+if _ADMIN_PW_ENV:
+    ADMIN_PASSWORD = _ADMIN_PW_ENV
+else:
+    import secrets
+    ADMIN_PASSWORD = secrets.token_hex(16)
+    print("⚠️  ADMIN_PASSWORD no está definida en .env. Se usó una contraseña aleatoria.")
+    print(f"   → La contraseña del admin es: {ADMIN_PASSWORD}")
+    print("   → Defínela en .env como ADMIN_PASSWORD=tu_contraseña para que sea permanente.")
+
 # ── Rate limiting ──
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "2.0"))
 MAX_PAGES_PER_CRAWL = int(os.getenv("MAX_PAGES_PER_CRAWL", "500"))

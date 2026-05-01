@@ -152,6 +152,27 @@ function closeSidebar() {
     document.getElementById('sidebarOverlay').classList.remove('visible');
 }
 
+// Swipe para abrir/cerrar sidebar en móvil
+(function() {
+    let _tx = 0, _ty = 0;
+    document.addEventListener('touchstart', e => {
+        _tx = e.touches[0].clientX;
+        _ty = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - _tx;
+        const dy = e.changedTouches[0].clientY - _ty;
+        if (Math.abs(dx) < Math.abs(dy) * 1.2 || Math.abs(dx) < 48) return;
+        const sidebar = document.querySelector('.sidebar');
+        if (dx > 0 && _tx < 44) {
+            sidebar.classList.add('open');
+            document.getElementById('sidebarOverlay').classList.add('visible');
+        } else if (dx < 0 && sidebar.classList.contains('open')) {
+            closeSidebar();
+        }
+    }, { passive: true });
+})();
+
 document.addEventListener("DOMContentLoaded", () => {
     // Conectar navegación
     document.querySelectorAll('.nav-item').forEach(item => {
