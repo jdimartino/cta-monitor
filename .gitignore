@@ -37,3 +37,4 @@ test_api.py
 test_rank.py
 test_regex.py
 fetch_test.py
+database.db

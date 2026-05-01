@@ -2357,6 +2357,30 @@ body {
 }
 
 /* ─────────────────────────────────────────────
+   BOTÓN FLOTANTE VOLVER (solo móvil)
+───────────────────────────────────────────── */
+.floating-back-btn {
+    display: none; /* JS lo muestra en móvil */
+    position: fixed;
+    bottom: 24px;
+    left: 16px;
+    z-index: 300;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 20px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.floating-back-btn:active { transform: scale(0.92); }
+
+/* ─────────────────────────────────────────────
    MOBILE — hamburger + sidebar slide-in
 ───────────────────────────────────────────── */
 .hamburger-btn { display: none; }
@@ -2808,5 +2832,34 @@ body {
     
     .refuerzo-row {
         font-size: 13px; /* Aumentar fuente base en móvil */
+    }
+}
+
+/* ─── Nómina de jugadores responsive ─── */
+@media (max-width: 720px) {
+    .player-row {
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        padding: 12px;
+    }
+    .player-row .player-avatar,
+    .player-row .player-avatar-img {
+        order: 1;
+    }
+    .player-row .player-name {
+        order: 2;
+        flex: 1;
+        min-width: 0;
+        font-size: 14px;
+    }
+    .player-row .player-detail-hint {
+        order: 3;
+    }
+    .player-row .player-stat-pill {
+        order: 4;
+        width: calc(50% - 6px);
+        font-size: 12px;
+        padding: 4px 10px;
+        box-sizing: border-box;
     }
 }

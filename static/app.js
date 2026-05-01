@@ -14,6 +14,8 @@ let ownTeamId = null;      // Se llena desde /api/dashboard
 
 let currentUser = null;   // { id, username, is_admin }
 let authToken   = null;   // string hex-64 o null
+let _crawlSummary = null; // Capturado de __SUMMARY__ al finalizar crawl
+let _currentView = 'posiciones';
 
 function authFetch(url, options = {}) {
     const headers = { ...(options.headers || {}) };
@@ -29,9 +31,9 @@ function showLoginOverlay() {
     document.getElementById('loginUsername').focus();
 }
 
-function hideLoginOverlay() { 
-    document.getElementById('loginOverlay').style.display = 'none'; 
-    navigateTo('posiciones'); 
+function hideLoginOverlay() {
+    document.getElementById('loginOverlay').style.display = 'none';
+    navigateTo('posiciones', true);
 }
 
 // Handler global para tecla ESC en el login
@@ -108,7 +110,7 @@ async function handleLogin(event) {
         localStorage.setItem('cta_auth_token', authToken);
         hideLoginOverlay();
         _applyAuthState();
-        loadClubs().then(() => { navigateTo('posiciones'); fetchLastSync(); initSearch(); });
+        loadClubs().then(() => { navigateTo('posiciones', true); fetchLastSync(); initSearch(); });
     } catch { errEl.textContent = 'Error de red'; errEl.style.display = 'block'; }
     finally { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="ri-login-circle-line"></i> Ingresar'; }
 }
@@ -120,7 +122,7 @@ async function handleLogout() {
     authToken = null; currentUser = null;
     localStorage.removeItem('cta_auth_token');
     _applyAuthState();
-    navigateTo('posiciones');
+    navigateTo('posiciones', true);
 }
 
 // ─────────────────────────────────────────────
@@ -183,10 +185,14 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Inicializar historial del browser para navegación con "atrás"
+    history.replaceState({ view: 'posiciones' }, '', window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+
     // Restaurar sesión silenciosamente y cargar la app siempre
     checkAuth().then(() => {
         _applyAuthState();
-        loadClubs().then(() => { navigateTo('posiciones'); fetchLastSync(); initSearch(); });
+        loadClubs().then(() => { navigateTo('posiciones', true); fetchLastSync(); initSearch(); });
     });
 });
 
@@ -303,7 +309,7 @@ function highlightMatch(text, query) {
     return result;
 }
 
-function searchSelectTeam(ctaId, _name, isOwn) {
+function searchSelectTeam(ctaId, _name, _isOwn) {
     closeSearchDropdown();
     document.getElementById('searchInput').value = '';
     showTeamDetailView(ctaId, _name);
@@ -323,7 +329,34 @@ function closeSearchDropdown() {
 // ─────────────────────────────────────────────
 // ROUTER
 // ─────────────────────────────────────────────
-function navigateTo(viewId) {
+function _updateBackBtn() {
+    const btn = document.getElementById('floatingBackBtn');
+    if (!btn) return;
+    const isMobile = window.innerWidth <= 768;
+    btn.style.display = (isMobile && _currentView !== 'posiciones') ? 'flex' : 'none';
+}
+
+function handlePopState(event) {
+    const state = event.state || { view: 'posiciones' };
+
+    // Cerrar cualquier modal abierto primero
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('active')) {
+        modal.classList.remove('active');
+        document.body.style.overflow = '';
+    }
+
+    // Si el estado es un modal (navegación hacia adelante), no re-abrimos
+    if (state.modal) return;
+
+    if (state.view === 'team-detail') {
+        showTeamDetailView(state.teamCtaId, state.teamName, null, true);
+    } else if (state.view) {
+        navigateTo(state.view, true);
+    }
+}
+
+function navigateTo(viewId, _noPush = false) {
     // Actualizar estado activo en nav
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
     const activeNav = document.querySelector(`[data-view="${viewId}"]`);
@@ -347,19 +380,28 @@ function navigateTo(viewId) {
         fetchRivalTeams();
     }
     else if (viewId === 'admin') {
-        if (currentUser?.role !== 'admin') { navigateTo('posiciones'); return; }
+        if (!currentUser?.is_admin) { navigateTo('posiciones', true); return; }
         loadAdminUsers();
+        loadCrawlErrors();
     }
     else if (viewId === 'refuerzos') initRefuerzosView();
     // team-detail se carga desde showTeamDetailView, no aquí
+
+    _currentView = viewId;
+    _updateBackBtn();
+    if (!_noPush) history.pushState({ view: viewId }, '', window.location.pathname);
 }
 
-async function showTeamDetailView(teamCtaId, teamName, standingsRow = null) {
+async function showTeamDetailView(teamCtaId, teamName, standingsRow = null, _noPush = false) {
     // Activar vista sin disparar carga de datos del navigateTo normal
     document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
     document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
     const view = document.getElementById('view-team-detail');
     if (view) view.classList.add('active');
+
+    _currentView = 'team-detail';
+    _updateBackBtn();
+    if (!_noPush) history.pushState({ view: 'team-detail', teamCtaId, teamName }, '', window.location.pathname);
 
     // Resetear contenido con spinners
     document.getElementById('tdTeamName').textContent    = expandTeamName(teamName) || teamName;
@@ -595,12 +637,36 @@ function startSSE(url, btnId, btnIdleHTML, title) {
 
     es.onmessage = (e) => {
         const msg = e.data;
+
+        // Capturar resumen parseable (no mostrar en log)
+        if (msg.startsWith('__SUMMARY__')) {
+            _crawlSummary = {};
+            msg.replace('__SUMMARY__', '').split('|').forEach(pair => {
+                const [k, v] = pair.split('=');
+                _crawlSummary[k] = Number(v);
+            });
+            return;
+        }
+
         if (msg.startsWith('__DONE__')) {
             const ok = msg === '__DONE__ok';
             const statusEl = document.getElementById('logPanelStatus');
             statusEl.textContent = ok ? '✓ Completado' : '✗ Error';
             statusEl.className = 'log-status ' + (ok ? 'done-ok' : 'done-error');
             appendLog(ok ? '— Operación completada exitosamente —' : '— Finalizó con error —', ok ? 'success' : 'error');
+
+            // Mostrar resumen del crawl si está disponible
+            if (_crawlSummary) {
+                appendLog('', 'normal');
+                appendLog('━━━━ RESUMEN DEL CRAWL ━━━━', 'success');
+                appendLog(`  Equipos    : ${_crawlSummary.teams}`, 'info');
+                appendLog(`  Jugadores  : ${_crawlSummary.players}`, 'info');
+                appendLog(`  Páginas    : ${_crawlSummary.pages}`, 'info');
+                appendLog(`  Errores    : ${_crawlSummary.errors}`, _crawlSummary.errors > 0 ? 'error' : 'success');
+                appendLog('━━━━━━━━━━━━━━━━━━━━━━━━━━', 'success');
+                _crawlSummary = null;
+            }
+
             es.close();
             _activeSSE = null;
 
@@ -613,7 +679,7 @@ function startSSE(url, btnId, btnIdleHTML, title) {
 
             // Refresh current view
             const viewId = document.querySelector('.view-section.active')?.id?.replace('view-', '');
-            if (viewId) navigateTo(viewId);
+            if (viewId) navigateTo(viewId, true);
             fetchLastSync();
         } else {
             const type = msg.includes('ERROR') || msg.includes('Error') ? 'error'
@@ -1066,6 +1132,7 @@ function renderPlayerRoster(players, containerId = 'playerRoster') {
 // MODAL: PERFIL DE JUGADOR
 // ─────────────────────────────────────────────
 async function openPlayerModal(ctaId) {
+    history.pushState({ modal: 'player', ctaId }, '', window.location.pathname);
     const modal = document.getElementById('playerModal');
     const content = document.getElementById('playerModalContent');
     content.innerHTML = '<div class="loading-spinner"></div>';
@@ -1089,6 +1156,7 @@ async function openPlayerModal(ctaId) {
 }
 
 async function openTeamModal(teamCtaId, teamName, standingsRow = null) {
+    history.pushState({ modal: 'team', teamCtaId }, '', window.location.pathname);
     const modal = document.getElementById('playerModal');
     const content = document.getElementById('playerModalContent');
     content.innerHTML = '<div class="loading-spinner"></div>';
@@ -1287,6 +1355,7 @@ function closePlayerModal(event) {
 }
 
 async function openMatchDetailModal(matchId) {
+    history.pushState({ modal: 'match', matchId }, '', window.location.pathname);
     const modal   = document.getElementById('playerModal');
     const content = document.getElementById('playerModalContent');
     content.innerHTML = '<div class="loading-spinner"></div>';
@@ -2123,4 +2192,35 @@ async function deleteUser(id, username) {
         if (!res.ok) { const d = await res.json(); alert(d.detail || 'Error'); return; }
         loadAdminUsers();
     } catch { alert('Error de red'); }
+}
+
+// ─────────── ADMIN: Errores del Crawl ───────────
+async function loadCrawlErrors() {
+    const container = document.getElementById('crawlErrorsContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-spinner"></div>';
+    try {
+        const res  = await authFetch('/api/crawl/errors');
+        const data = await res.json();
+        const errors = data.errors || [];
+        if (!errors.length) {
+            container.innerHTML = '<p class="empty-state-msg" style="color:var(--accent-green);font-size:13px;">✓ Sin errores registrados.</p>';
+            return;
+        }
+        container.innerHTML = `
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">
+                ${errors.length} error(es) reciente(s) — más reciente al final
+            </p>
+            <div class="crawl-errors-list">
+                ${errors.map((e, i) => `
+                    <details class="crawl-error-item">
+                        <summary class="crawl-error-summary">
+                            <i class="ri-error-warning-line"></i>
+                            <span>${e.split('\n')[0].slice(0, 120)}</span>
+                        </summary>
+                        <pre class="crawl-error-pre">${e.replace(/</g,'&lt;')}</pre>
+                    </details>
+                `).join('')}
+            </div>`;
+    } catch { container.innerHTML = '<p class="empty-state-msg">Error al cargar.</p>'; }
 }

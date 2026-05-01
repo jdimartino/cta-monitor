@@ -1090,7 +1090,7 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             return {"error": "Could not authenticate"}
 
     database.init_db()
-    summary = {"teams_found": 0, "players_found": 0, "pages_scraped": 0}
+    summary = {"teams_found": 0, "players_found": 0, "pages_scraped": 0, "team_errors": 0, "player_errors": 0}
     pages_scraped = 0
     page_limit = max_pages  # None = sin límite; el check `if page_limit` lo maneja
 
@@ -1129,11 +1129,17 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
                 # We'll still fetch to check hash, but skip if same
                 pass
 
-        team_result = crawl_team(session, cta_id)
-        pages_scraped += 1
-        players = team_result.get("players", [])
-        all_players.extend(players)
-        print(f"  [{pages_scraped}] {team_data.get('name', cta_id)}: {len(players)} jugadores")
+        try:
+            team_result = crawl_team(session, cta_id)
+            pages_scraped += 1
+            players = team_result.get("players", [])
+            all_players.extend(players)
+            print(f"  [{pages_scraped}] {team_data.get('name', cta_id)}: {len(players)} jugadores")
+        except Exception as e:
+            summary["team_errors"] += 1
+            logger.exception(f"[Crawl] Error procesando equipo {cta_id} ({team_data.get('name', '')})")
+            print(f"  ERROR equipo {cta_id} ({team_data.get('name', '')}): {e}")
+            continue
 
     summary["players_found"] = len(all_players)
 
@@ -1144,11 +1150,36 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             logger.warning(f"Reached max pages limit ({page_limit})")
             break
 
-        crawl_player(session, player["cta_id"])
+        try:
+            result = crawl_player(session, player["cta_id"])
+            if isinstance(result, dict) and result.get("error"):
+                summary["player_errors"] += 1
+                print(f"  ERROR jugador {player['cta_id']} ({player.get('name', '')}): {result['error']}")
+        except Exception as e:
+            summary["player_errors"] += 1
+            logger.exception(f"[Crawl] Error procesando jugador {player['cta_id']} ({player.get('name', '')})")
+            print(f"  ERROR jugador {player['cta_id']} ({player.get('name', '')}): {e}")
         pages_scraped += 1
 
     summary["pages_scraped"] = pages_scraped
-    print(f"\n[Spider] Completado: {summary}")
+    total_errors = summary["team_errors"] + summary["player_errors"]
+
+    print(f"\n{'━' * 48}")
+    print(f"  RESUMEN DEL CRAWL COMPLETO")
+    print(f"{'━' * 48}")
+    print(f"  Equipos procesados   : {summary['teams_found']}")
+    print(f"  Jugadores procesados : {summary['players_found']}")
+    print(f"  Páginas scrapeadas   : {summary['pages_scraped']}")
+    if total_errors == 0:
+        print(f"  Errores encontrados  : 0  ✓")
+    else:
+        print(f"  Errores encontrados  : {total_errors}  ⚠")
+        if summary["team_errors"]:
+            print(f"    • Equipos con error : {summary['team_errors']}")
+        if summary["player_errors"]:
+            print(f"    • Jugadores con error: {summary['player_errors']}")
+    print(f"{'━' * 48}")
+    print(f"__SUMMARY__teams={summary['teams_found']}|players={summary['players_found']}|pages={summary['pages_scraped']}|errors={total_errors}")
     return summary
 
 

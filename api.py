@@ -434,6 +434,36 @@ def trigger_crawl():
     except Exception as e:
         return {"success": False, "message": str(e)}
 
+@app.get("/api/crawl/errors")
+def get_crawl_errors(_: dict = Depends(require_admin)):
+    """Últimos errores del crawl registrados en cta.log."""
+    log_path = Path(__file__).parent / "logs" / "cta.log"
+    if not log_path.exists():
+        return {"errors": [], "message": "Log no encontrado"}
+    errors = []
+    try:
+        with open(log_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        # Capturar bloques ERROR/CRITICAL con su traceback
+        i = 0
+        while i < len(lines):
+            line = lines[i].rstrip()
+            if " ERROR " in line or " CRITICAL " in line:
+                block = [line]
+                j = i + 1
+                while j < len(lines) and (lines[j].startswith(" ") or lines[j].startswith("\t") or "Traceback" in lines[j] or "File " in lines[j]):
+                    block.append(lines[j].rstrip())
+                    j += 1
+                errors.append("\n".join(block))
+                i = j
+            else:
+                i += 1
+        # Devolver los 50 más recientes
+        return {"errors": errors[-50:], "total": len(errors)}
+    except Exception as e:
+        return {"errors": [], "message": str(e)}
+
+
 @app.get("/api/players")
 def get_all_players():
     """All players with their team info for search."""

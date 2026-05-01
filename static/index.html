@@ -123,8 +123,8 @@
                     <section class="page-header-section">
                         <div class="glass-panel page-header-card">
                             <div class="page-header-info">
-                                <button class="back-btn" onclick="navigateTo('posiciones')">
-                                    <i class="ri-arrow-left-line"></i> Posiciones
+                                <button class="back-btn" onclick="history.back()">
+                                    <i class="ri-arrow-left-line"></i> Volver
                                 </button>
                                 <div class="page-icon purple"><i class="ri-shield-user-fill"></i></div>
                                 <div>
@@ -293,11 +293,28 @@
                             <div id="usersTable"><div class="loading-spinner"></div></div>
                         </div>
                     </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3>Errores del Crawl</h3>
+                                <button class="secondary-btn" onclick="loadCrawlErrors()" style="font-size:12px;padding:6px 12px;">
+                                    <i class="ri-refresh-line"></i> Actualizar
+                                </button>
+                            </div>
+                            <div id="crawlErrorsContainer"><p class="empty-state-msg" style="font-size:13px;">Haz clic en Actualizar para ver errores recientes.</p></div>
+                        </div>
+                    </section>
                 </div>
             </div><!-- /view-admin -->
 
         </main>
     </div>
+
+    <!-- ═══════ BOTÓN FLOTANTE: VOLVER (solo móvil) ═══════ -->
+    <button id="floatingBackBtn" class="floating-back-btn" style="display:none" onclick="history.back()" aria-label="Volver">
+        <i class="ri-arrow-left-line"></i>
+    </button>
 
     <!-- ═══════ PANEL: LOG EN VIVO ═══════ -->
     <div id="logPanel" class="log-panel">
