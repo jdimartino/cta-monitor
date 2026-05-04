@@ -152,7 +152,7 @@ def _reset_connection_pool(session: requests.Session):
 
 
 def authenticated_get(
-    session: requests.Session, url: str, max_retries: int = 3
+    session: requests.Session, url: str, max_retries: int = 5
 ) -> requests.Response | None:
     """GET with auto-retry on session expiry, HTTP errors, and SSL/connection drops."""
     for attempt in range(max_retries + 1):
@@ -179,7 +179,7 @@ def authenticated_get(
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status in (429, 503) and attempt < max_retries:
-                wait = config.REQUEST_DELAY * (2 ** attempt)
+                wait = min(config.REQUEST_DELAY * (2 ** attempt), 60)
                 logger.warning(f"HTTP {status}, backing off {wait}s")
                 time.sleep(wait)
                 continue
@@ -187,7 +187,7 @@ def authenticated_get(
             return None
         except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
             if attempt < max_retries:
-                wait = config.REQUEST_DELAY * (3 ** attempt)
+                wait = min(config.REQUEST_DELAY * (3 ** attempt), 60)
                 logger.warning(f"SSL/Connection error (attempt {attempt + 1}/{max_retries}), retrying in {wait:.1f}s: {e}")
                 time.sleep(wait)
                 _reset_connection_pool(session)

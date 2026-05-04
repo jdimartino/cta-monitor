@@ -11,6 +11,8 @@ import json
 import re
 import hashlib
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from bs4 import BeautifulSoup
@@ -1019,9 +1021,10 @@ def crawl_team(session, team_cta_id: int) -> dict:
     return data
 
 
-def crawl_player(session, player_cta_id: int) -> dict:
+def crawl_player(session, player_cta_id: int, incremental: bool = False) -> dict:
     """Fetch and parse a player profile. Insert stats into DB."""
-    url = f"{config.BASE_URL}/cts/profile/{player_cta_id}/"
+    url      = f"{config.BASE_URL}/cts/profile/{player_cta_id}/"
+    url_path = f"/cts/profile/{player_cta_id}/"
     logger.info(f"Crawling player {player_cta_id}: {url}")
 
     resp = auth.authenticated_get(session, url)
@@ -1029,11 +1032,16 @@ def crawl_player(session, player_cta_id: int) -> dict:
         logger.error(f"Failed to fetch player page: {player_cta_id}")
         return {}
 
-    html = resp.text
+    html   = resp.text
     page_h = _page_hash(html)
 
-    database.set_url(f"/cts/profile/{player_cta_id}/", "player", player_cta_id)
-    database.update_url_hash(f"/cts/profile/{player_cta_id}/", page_h)
+    database.set_url(url_path, "player", player_cta_id)  # siempre actualiza last_scraped
+
+    if incremental and not database.needs_rescrape(url_path, page_h):
+        logger.debug(f"[Skip] Jugador {player_cta_id} sin cambios")
+        return {"_skipped": True}
+
+    database.update_url_hash(url_path, page_h)
 
     data = parse_player_page(html)
 
@@ -1120,15 +1128,6 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             logger.warning(f"Reached max pages limit ({page_limit})")
             break
 
-        # Incremental check
-        if incremental:
-            url_path = f"/cts/team_d/{cta_id}/"
-            url_info = database.get_urls_by_type("team")
-            existing = [u for u in url_info if u["url"] == url_path]
-            if existing and existing[0].get("last_hash"):
-                # We'll still fetch to check hash, but skip if same
-                pass
-
         try:
             team_result = crawl_team(session, cta_id)
             pages_scraped += 1
@@ -1143,23 +1142,57 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
 
     summary["players_found"] = len(all_players)
 
-    # Step 3: Crawl each player
-    print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores...")
-    for player in all_players:
-        if page_limit and pages_scraped >= page_limit:
-            logger.warning(f"Reached max pages limit ({page_limit})")
-            break
+    # Step 3: Crawl each player — 3 workers en paralelo
+    print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores (3 en paralelo)...")
+    _lock          = threading.Lock()
+    _p_counts      = {"scraped": 0, "errors": 0}
+    _failed_players = []
 
+    def _crawl_one_player(player):
+        pid  = player["cta_id"]
+        name = player.get("name", str(pid))
         try:
-            result = crawl_player(session, player["cta_id"])
-            if isinstance(result, dict) and result.get("error"):
-                summary["player_errors"] += 1
-                print(f"  ERROR jugador {player['cta_id']} ({player.get('name', '')}): {result['error']}")
+            result  = crawl_player(session, pid, incremental=incremental)
+            skipped = isinstance(result, dict) and result.get("_skipped")
+            with _lock:
+                _p_counts["scraped"] += 1
+                tag = "(sin cambios)" if skipped else "✓"
+                print(f"  [{_p_counts['scraped']}/{len(all_players)}] {name} {tag}")
         except Exception as e:
-            summary["player_errors"] += 1
-            logger.exception(f"[Crawl] Error procesando jugador {player['cta_id']} ({player.get('name', '')})")
-            print(f"  ERROR jugador {player['cta_id']} ({player.get('name', '')}): {e}")
-        pages_scraped += 1
+            with _lock:
+                _p_counts["scraped"] += 1
+                _p_counts["errors"]  += 1
+                _failed_players.append(player)
+            logger.exception(f"[Crawl] Error jugador {pid} ({name})")
+            print(f"  ERROR jugador {pid} ({name}): {e}")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        list(pool.map(_crawl_one_player, all_players))
+
+    pages_scraped += _p_counts["scraped"]
+
+    # Step 4: Segunda pasada — reintentar jugadores fallidos por SSL/conexión
+    if _failed_players:
+        print(f"\n[Spider] Paso 4: Segunda pasada — {len(_failed_players)} jugadores fallidos...")
+        time.sleep(30)  # pausa para que el servidor se recupere
+        auth._reset_connection_pool(session)
+        retry_errors = 0
+        for i, player in enumerate(_failed_players, 1):
+            pid  = player["cta_id"]
+            name = player.get("name", str(pid))
+            try:
+                result  = crawl_player(session, pid, incremental=False)
+                skipped = isinstance(result, dict) and result.get("_skipped")
+                tag = "(sin cambios)" if skipped else "✓"
+                print(f"  [retry {i}/{len(_failed_players)}] {name} {tag}")
+            except Exception as e:
+                retry_errors += 1
+                logger.error(f"[Crawl] Retry fallido jugador {pid} ({name}): {e}")
+                print(f"  [retry {i}/{len(_failed_players)}] ERROR {name}: {e}")
+        summary["player_errors"] = retry_errors
+        print(f"  Segunda pasada completada: {len(_failed_players) - retry_errors}/{len(_failed_players)} recuperados")
+    else:
+        summary["player_errors"] = _p_counts["errors"]
 
     summary["pages_scraped"] = pages_scraped
     total_errors = summary["team_errors"] + summary["player_errors"]
