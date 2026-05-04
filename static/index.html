@@ -274,13 +274,25 @@
                                 <button class="icon-btn primary-btn" id="syncBtn" onclick="syncData()">
                                     <i class="ri-refresh-line"></i> Sincronizar
                                 </button>
-                                <button class="icon-btn group-btn" id="groupBtn" onclick="groupSync()" title="Actualiza posiciones y calendario del grupo (~5 seg)">
-                                    <i class="ri-calendar-check-line"></i> Actualizar Grupo
-                                </button>
-                                <button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Descarga todos los equipos y jugadores (~5 min)">
+<button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Re-descarga todo sin excepción (~5 min)">
                                     <i class="ri-database-2-line"></i> Crawl Completo
                                 </button>
+                                <button class="icon-btn smart-crawl-btn" id="smartCrawlBtn" onclick="crawlSmart()" title="Solo actualiza jugadores con cambios — más rápido">
+                                    <i class="ri-flashlight-line"></i> Crawl Inteligente
+                                </button>
                             </div>
+                        </div>
+                    </section>
+
+                    <section class="full-width-section">
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <h3><i class="ri-history-line"></i> Historial de Crawls</h3>
+                                <button class="secondary-btn" onclick="loadCrawlRuns()" style="font-size:12px;padding:6px 12px;">
+                                    <i class="ri-refresh-line"></i> Actualizar
+                                </button>
+                            </div>
+                            <div id="crawlRunsContainer"><p class="empty-state-msg" style="font-size:13px;">Cargando...</p></div>
                         </div>
                     </section>
 
@@ -297,7 +309,7 @@
                     <section class="full-width-section">
                         <div class="glass-panel">
                             <div class="panel-header">
-                                <h3>Errores del Crawl</h3>
+                                <h3>Errores del Log</h3>
                                 <button class="secondary-btn" onclick="loadCrawlErrors()" style="font-size:12px;padding:6px 12px;">
                                     <i class="ri-refresh-line"></i> Actualizar
                                 </button>

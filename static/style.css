@@ -376,7 +376,8 @@ body {
 /* Otras vistas con scroll normal */
 #view-equipo.active,
 #view-posiciones.active,
-#view-predictor.active {
+#view-predictor.active,
+#view-admin.active {
     flex: 1;
     overflow-y: auto;
     padding-bottom: 20px;
@@ -2302,6 +2303,50 @@ body {
     white-space: nowrap;
 }
 .back-btn:hover { color: var(--text-primary); border-color: var(--accent-blue); }
+
+/* ─────────────────────────────────────────────
+   HISTORIAL DE CRAWLS
+───────────────────────────────────────────── */
+.crawl-run-item {
+    border-bottom: 1px solid var(--border-color);
+}
+.crawl-run-item:last-child { border-bottom: none; }
+
+.crawl-run-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 4px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 13px;
+}
+.crawl-run-summary::-webkit-details-marker { display: none; }
+.crawl-run-summary::marker { display: none; }
+
+.run-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.run-status-dot.ok  { background: var(--accent-green); }
+.run-status-dot.err { background: #ff4d6d; }
+
+.run-date  { color: var(--text-primary); font-weight: 500; white-space: nowrap; }
+.run-stats { color: var(--text-muted); flex: 1; min-width: 0; }
+
+.run-err-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: rgba(255, 77, 109, 0.15);
+    color: #ff4d6d;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.crawl-run-detail { padding: 4px 0 10px 18px; }
 
 /* ─────────────────────────────────────────────
    TEAM MODAL — enriquecido
