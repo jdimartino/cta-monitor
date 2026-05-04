@@ -1142,18 +1142,26 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
 
     summary["players_found"] = len(all_players)
 
-    # Step 3: Crawl each player — 3 workers en paralelo
-    print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores (3 en paralelo)...")
-    _lock          = threading.Lock()
-    _p_counts      = {"scraped": 0, "errors": 0}
+    # Step 3: Crawl each player — 2 workers en paralelo, sesión propia por thread
+    _num_workers = 2
+    print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores ({_num_workers} en paralelo)...")
+    _lock           = threading.Lock()
+    _p_counts       = {"scraped": 0, "errors": 0}
     _failed_players = []
+    _thread_local   = threading.local()
+
+    def _get_thread_session():
+        if not hasattr(_thread_local, "session") or _thread_local.session is None:
+            _thread_local.session = auth.get_session()
+        return _thread_local.session
 
     def _crawl_one_player(player):
         pid  = player["cta_id"]
         name = player.get("name", str(pid))
         try:
-            result  = crawl_player(session, pid, incremental=incremental)
-            skipped = isinstance(result, dict) and result.get("_skipped")
+            t_session = _get_thread_session()
+            result    = crawl_player(t_session, pid, incremental=incremental)
+            skipped   = isinstance(result, dict) and result.get("_skipped")
             with _lock:
                 _p_counts["scraped"] += 1
                 tag = "(sin cambios)" if skipped else "✓"
@@ -1166,7 +1174,7 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             logger.exception(f"[Crawl] Error jugador {pid} ({name})")
             print(f"  ERROR jugador {pid} ({name}): {e}")
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with ThreadPoolExecutor(max_workers=_num_workers) as pool:
         list(pool.map(_crawl_one_player, all_players))
 
     pages_scraped += _p_counts["scraped"]

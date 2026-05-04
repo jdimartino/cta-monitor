@@ -46,7 +46,7 @@ else:
     print("   → Defínela en .env como ADMIN_PASSWORD=tu_contraseña para que sea permanente.")
 
 # ── Rate limiting ──
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "2.0"))
+REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "1.0"))
 MAX_PAGES_PER_CRAWL = int(os.getenv("MAX_PAGES_PER_CRAWL", "500"))
 
 # ── Known IDs (configurable) ──
