@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -268,13 +270,12 @@ def get_groups(categoria: str = None):
 def get_group_fixtures(group_id: int):
     """Fixtures (calendar) for a specific group."""
     fixtures = database.get_group_fixtures(group_id)
-    import json as _json
     result = []
     for f in fixtures:
         row = dict(f)
         if row.get("raw_detail"):
             try:
-                row["raw_detail"] = _json.loads(row["raw_detail"])
+                row["raw_detail"] = json.loads(row["raw_detail"])
             except Exception:
                 pass
         result.append(row)
@@ -373,12 +374,60 @@ def group_stream(_: dict = Depends(require_admin)):
     )
 
 
+def _crawl_stream_logged(cmd: list[str], timeout: int):
+    """Like _stream_command but persists each run summary + errors to crawl_runs table."""
+    started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    collected_errors: list[str] = []
+    summary: dict = {}
+    script_dir = str(Path(__file__).parent)
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, cwd=script_dir,
+        )
+        def _kill():
+            try: proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired: proc.kill()
+        threading.Thread(target=_kill, daemon=True).start()
+
+        for line in proc.stdout:
+            clean = line.rstrip()
+            if not clean:
+                continue
+            if clean.startswith('__SUMMARY__'):
+                for pair in clean.replace('__SUMMARY__', '').split('|'):
+                    k, _, v = pair.partition('=')
+                    if k:
+                        try: summary[k] = int(v)
+                        except ValueError: pass
+            elif ' ERROR ' in clean or ' CRITICAL ' in clean:
+                collected_errors.append(clean)
+            yield f"data: {clean}\n\n"
+
+        proc.wait()
+        status = "ok" if proc.returncode == 0 else "error"
+        finished_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            database.save_crawl_run(
+                started_at, finished_at, status,
+                summary.get('teams'), summary.get('players'),
+                summary.get('pages'), summary.get('errors'),
+                json.dumps(collected_errors),
+            )
+        except Exception:
+            pass
+        yield f"data: __DONE__{status}\n\n"
+    except Exception as e:
+        yield f"data: ERROR: {e}\n\n"
+        yield "data: __DONE__error\n\n"
+
+
 @app.get("/api/crawl/stream")
 def crawl_stream(_: dict = Depends(require_admin)):
     """SSE stream: full crawl (all categories + all players)."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
-        _stream_command([sys.executable, "-u", script, "crawl", "--full"], timeout=10800),
+        _crawl_stream_logged([sys.executable, "-u", script, "crawl", "--full"], timeout=10800),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -448,7 +497,7 @@ def get_crawl_errors(_: dict = Depends(require_admin)):
         i = 0
         while i < len(lines):
             line = lines[i].rstrip()
-            if " ERROR " in line or " CRITICAL " in line:
+            if " ERROR" in line or " CRITICAL" in line:
                 block = [line]
                 j = i + 1
                 while j < len(lines) and (lines[j].startswith(" ") or lines[j].startswith("\t") or "Traceback" in lines[j] or "File " in lines[j]):
@@ -462,6 +511,29 @@ def get_crawl_errors(_: dict = Depends(require_admin)):
         return {"errors": errors[-50:], "total": len(errors)}
     except Exception as e:
         return {"errors": [], "message": str(e)}
+
+
+@app.get("/api/crawl/smart")
+def crawl_smart_stream(_: dict = Depends(require_admin)):
+    """SSE stream: crawl incremental — salta jugadores sin cambios."""
+    script = str(Path(__file__).parent / "main.py")
+    return StreamingResponse(
+        _crawl_stream_logged([sys.executable, "-u", script, "crawl"], timeout=10800),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/crawl/runs")
+def get_crawl_runs_endpoint(_: dict = Depends(require_admin)):
+    """Historial persistente de crawls completos."""
+    runs = database.get_crawl_runs(limit=30)
+    for r in runs:
+        try:
+            r['error_log'] = json.loads(r['error_log']) if r.get('error_log') else []
+        except Exception:
+            r['error_log'] = []
+    return {"runs": runs}
 
 
 @app.get("/api/players")
@@ -498,12 +570,12 @@ def _compute_sets(history: list) -> tuple[int, int]:
 def _enrich_stats_from_raw(stats_out: dict) -> dict:
     """Extrae ranking del raw_data JSON cuando el campo estructurado es NULL.
     También deserializa `chips` (almacenado como JSON string) a lista."""
-    import re, json as _json
+    import re
 
     chips = stats_out.get("chips")
     if isinstance(chips, str) and chips:
         try:
-            stats_out["chips"] = _json.loads(chips)
+            stats_out["chips"] = json.loads(chips)
         except Exception:
             pass
 
@@ -511,7 +583,7 @@ def _enrich_stats_from_raw(stats_out: dict) -> dict:
     if not raw:
         return stats_out
     try:
-        raw_dict = _json.loads(raw) if isinstance(raw, str) else raw
+        raw_dict = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
         return stats_out
 
