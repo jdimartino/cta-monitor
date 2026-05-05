@@ -290,16 +290,28 @@ def _player_ranking(cta_id: int) -> float | None:
     return None
 
 
-def _win_prob_estimate(own_players: list[int], rival_players: list[int]) -> float:
+def _win_prob_estimate(
+    own_players: list[int],
+    rival_players: list[int],
+    rankings_cache: dict[int, float | None] | None = None,
+    h2h_cache: dict[tuple[int, int], list[dict]] | None = None,
+) -> float:
     """Estima probabilidad de victoria basada en ranking diferencial + H2H.
+
+    rankings_cache: dict {cta_id: ranking} para evitar N+1 queries.
+    h2h_cache: dict {(own_cta_id, rival_cta_id): [rubbers]} pre-cargado.
 
     Retorna valor 0.0–1.0 (0.5 = paridad / sin datos).
     """
     score = 0.5
 
     # Ranking diferencial (promedio de la pareja si aplica)
-    own_ranks = [r for r in [_player_ranking(p) for p in own_players] if r is not None]
-    riv_ranks = [r for r in [_player_ranking(p) for p in rival_players] if r is not None]
+    if rankings_cache is not None:
+        own_ranks = [rankings_cache.get(p) for p in own_players if rankings_cache.get(p) is not None]
+        riv_ranks = [rankings_cache.get(p) for p in rival_players if rankings_cache.get(p) is not None]
+    else:
+        own_ranks = [r for r in [_player_ranking(p) for p in own_players] if r is not None]
+        riv_ranks = [r for r in [_player_ranking(p) for p in rival_players] if r is not None]
 
     if own_ranks and riv_ranks:
         own_avg = sum(own_ranks) / len(own_ranks)
@@ -314,13 +326,16 @@ def _win_prob_estimate(own_players: list[int], rival_players: list[int]) -> floa
     h2h_wins = h2h_total = 0
     for own_id in own_players:
         for riv_id in rival_players:
-            rubbers = database.get_player_head_to_head(own_id, riv_id)
+            if h2h_cache is not None:
+                rubbers = h2h_cache.get((own_id, riv_id), [])
+            else:
+                rubbers = database.get_player_head_to_head(own_id, riv_id)
             for r in rubbers:
                 h2h_total += 1
-                home_ids = [r.get("home_player_id"), r.get("home_partner_id")]
+                home_cta_ids = {r.get("home_player_cta_id"), r.get("home_partner_cta_id")}
                 won = (
-                    (r.get("winner") == "home" and own_id in home_ids) or
-                    (r.get("winner") == "away" and own_id not in home_ids)
+                    (r.get("winner") == "home" and own_id in home_cta_ids) or
+                    (r.get("winner") == "away" and own_id not in home_cta_ids)
                 )
                 if won:
                     h2h_wins += 1
@@ -376,6 +391,21 @@ def suggest_own_lineup_v2(
     all_own_cta_ids = [p["cta_id"] for p in own_players_meta]
     own_meta_by_cta = {p["cta_id"]: p for p in own_players_meta}
 
+    # Pre-cargar rankings y H2H para evitar N+1 queries
+    rival_ids = list({
+        p["cta_id"]
+        for e in rival_prediction
+        for p in e.get("players", [])
+        if p.get("cta_id")
+    })
+    all_player_ids = list(set(all_own_cta_ids + rival_ids))
+    rankings_cache: dict[int, float | None] = {cid: None for cid in all_player_ids}
+    if all_player_ids:
+        rankings_cache.update(database.get_bulk_player_rankings(all_player_ids))
+    h2h_cache: dict[tuple[int, int], list[dict]] = {}
+    if rival_ids:
+        h2h_cache = database.get_bulk_head_to_head_matches(all_own_cta_ids, rival_ids)
+
     # Construir candidatos propios por slot
     def own_candidates_for_slot(slot: str) -> list[list[int]]:
         if slot == "S1":
@@ -401,33 +431,31 @@ def suggest_own_lineup_v2(
         slot = pred_entry["slot"]
         rival_players = [p["cta_id"] for p in pred_entry["players"]]
 
-        best_combo: list[int] = []
-        best_prob = 0.0
-        alternatives: list[dict] = []
-
+        # Recolectar todos los combos con su probabilidad
+        combo_scores: list[tuple[list[int], float]] = []
         for combo in own_candidates_for_slot(slot):
             if not all(cid in all_own_cta_ids for cid in combo):
                 continue
-            prob = _win_prob_estimate(combo, rival_players)
-            if prob > best_prob:
-                if best_combo:
-                    alternatives.append({
-                        "players": [
-                            {"name": own_meta_by_cta[c]["name"], "cta_id": c}
-                            for c in best_combo if c in own_meta_by_cta
-                        ],
-                        "expected_win_prob": best_prob,
-                    })
-                best_prob = prob
-                best_combo = combo
-            elif combo != best_combo:
-                alternatives.append({
+            prob = _win_prob_estimate(combo, rival_players, rankings_cache, h2h_cache)
+            combo_scores.append((combo, prob))
+
+        combo_scores.sort(key=lambda x: x[1], reverse=True)
+
+        best_combo: list[int] = []
+        best_prob: float = 0.0
+        alternatives: list[dict] = []
+        if combo_scores:
+            best_combo, best_prob = combo_scores[0]
+            alternatives = [
+                {
                     "players": [
                         {"name": own_meta_by_cta[c]["name"], "cta_id": c}
                         for c in combo if c in own_meta_by_cta
                     ],
                     "expected_win_prob": prob,
-                })
+                }
+                for combo, prob in combo_scores[1:4]
+            ]
 
         priority_score = best_prob * (S1_PRIORITY_MULTIPLIER if slot == "S1" else 1.0)
 
@@ -437,7 +465,7 @@ def suggest_own_lineup_v2(
             "vs_players":        pred_entry["players"],
             "expected_win_prob": best_prob,
             "priority_score":    priority_score,
-            "alternatives":      sorted(alternatives, key=lambda x: x["expected_win_prob"], reverse=True)[:3],
+            "alternatives":      alternatives,
         })
 
     # Greedy assignment: ordenar por priority_score DESC para marcar primario/secundario
@@ -537,6 +565,9 @@ def detect_alerts(rival_cta_id: int, prediction: list[dict]) -> list[dict]:
             appeared = any(frozenset(h["players"]) == key for h in older_history)
 
         if not appeared:
+            # Solo alertar si realmente hay historia antigua contra la cual comparar
+            if not older_history and len(match_order) <= RECENT_WINDOW:
+                continue
             names = " / ".join(p["name"] for p in entry["players"])
             alerts.append({
                 "kind":     "first_time_pair",

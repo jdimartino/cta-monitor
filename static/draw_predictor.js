@@ -4,13 +4,22 @@
 //  Depende de: API_BASE, ownTeamId, openPlayerModal (app.js)
 // ═══════════════════════════════════════════════════════
 
-(function () {
+  (function () {
   'use strict';
 
   let _rivalId    = null;
   let _ownTeamId  = null;  // equipo propio seleccionado en paso 2
   let _ownPlayers = [];    // [{cta_id, name}, ...]
   let _checkedIds = null;  // null = todos disponibles
+
+  function _authHeaders() {
+    const token = localStorage.getItem('cta_auth_token');
+    return token ? { 'Authorization': 'Bearer ' + token } : {};
+  }
+
+  function _fetch(url) {
+    return fetch(url, { headers: _authHeaders() });
+  }
 
   /* ── Public API ── */
   window.DrawPredictor = {
@@ -37,13 +46,19 @@
       const mainQS     = [ownParam, availParam].filter(Boolean).join('&');
       const h2hQS      = ownParam;
 
-      const [main, timeData, hm, h2h, ownPlayers] = await Promise.all([
-        fetch(`${API_BASE}/api/draw-predictor/${rivalId}${mainQS ? '?' + mainQS : ''}`).then(r => r.json()),
-        fetch(`${API_BASE}/api/draw-predictor/${rivalId}/timeline?last_n=5`).then(r => r.json()),
-        fetch(`${API_BASE}/api/draw-predictor/${rivalId}/heatmap`).then(r => r.json()),
-        fetch(`${API_BASE}/api/draw-predictor/${rivalId}/h2h${h2hQS ? '?' + h2hQS : ''}`).then(r => r.json()),
+      const results = await Promise.allSettled([
+        _fetch(`${API_BASE}/api/draw-predictor/${rivalId}${mainQS ? '?' + mainQS : ''}`).then(r => r.json()),
+        _fetch(`${API_BASE}/api/draw-predictor/${rivalId}/timeline?last_n=5`).then(r => r.json()),
+        _fetch(`${API_BASE}/api/draw-predictor/${rivalId}/heatmap`).then(r => r.json()),
+        _fetch(`${API_BASE}/api/draw-predictor/${rivalId}/h2h${h2hQS ? '?' + h2hQS : ''}`).then(r => r.json()),
         ownPlayersPromise,
       ]);
+
+      const main      = results[0].status === 'fulfilled' ? results[0].value : {};
+      const timeData  = results[1].status === 'fulfilled' ? results[1].value : { timeline: [] };
+      const hm        = results[2].status === 'fulfilled' ? results[2].value : { players: [], slots: [], cells: [] };
+      const h2h       = results[3].status === 'fulfilled' ? results[3].value : null;
+      const ownPlayers = results[4].status === 'fulfilled' ? results[4].value : [];
 
       if (main.detail) {
         container.innerHTML = `<p class="dp-error">Error: ${main.detail}</p>`;
@@ -377,7 +392,7 @@
     try {
       const teamId = ownTeamId || window.ownTeamId;
       if (!teamId) return [];
-      const res  = await fetch(`${API_BASE}/api/team/${teamId}`);
+      const res  = await _fetch(`${API_BASE}/api/team/${teamId}`);
       const data = await res.json();
       return (data.players || []).map(p => ({ cta_id: p.cta_id, name: p.name }));
     } catch (e) {

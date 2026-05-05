@@ -352,28 +352,6 @@ def _stream_command(cmd: list[str], timeout: int):
         yield "data: __DONE__error\n\n"
 
 
-@app.get("/api/sync/stream")
-def sync_stream(_: dict = Depends(require_admin)):
-    """SSE stream: sync standings + own team."""
-    script = str(Path(__file__).parent / "main.py")
-    return StreamingResponse(
-        _stream_command([sys.executable, "-u", script, "sync"], timeout=120),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.get("/api/group/stream")
-def group_stream(_: dict = Depends(require_admin)):
-    """SSE stream: group crawl (standings + fixtures)."""
-    script = str(Path(__file__).parent / "main.py")
-    return StreamingResponse(
-        _stream_command([sys.executable, "-u", script, "group"], timeout=60),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 def _crawl_stream_logged(cmd: list[str], timeout: int):
     """Like _stream_command but persists each run summary + errors to crawl_runs table."""
     started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -407,12 +385,29 @@ def _crawl_stream_logged(cmd: list[str], timeout: int):
         proc.wait()
         status = "ok" if proc.returncode == 0 else "error"
         finished_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Categorizar errores: ssl/timeout/parse/auth/other
+        breakdown = {"ssl": 0, "timeout": 0, "parse": 0, "auth": 0, "other": 0}
+        for err in collected_errors:
+            low = err.lower()
+            if "ssl" in low or "sslerror" in low or "_ssl.c" in low:
+                breakdown["ssl"] += 1
+            elif "timeout" in low or "timed out" in low:
+                breakdown["timeout"] += 1
+            elif "[parse]" in low or "selector" in low:
+                breakdown["parse"] += 1
+            elif "auth" in low or "login" in low or "csrf" in low:
+                breakdown["auth"] += 1
+            else:
+                breakdown["other"] += 1
+
         try:
             database.save_crawl_run(
                 started_at, finished_at, status,
                 summary.get('teams'), summary.get('players'),
                 summary.get('pages'), summary.get('errors'),
                 json.dumps(collected_errors),
+                json.dumps(breakdown),
             )
         except Exception:
             pass
@@ -431,40 +426,6 @@ def crawl_stream(_: dict = Depends(require_admin)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-@app.post("/api/sync")
-def trigger_sync():
-    """Trigger a data sync (backwards-compat, non-streaming)."""
-    script = str(Path(__file__).parent / "main.py")
-    try:
-        result = subprocess.run(
-            [sys.executable, script, "sync"],
-            capture_output=True, text=True, timeout=120,
-            cwd=str(Path(__file__).parent),
-        )
-        return {"success": result.returncode == 0, "message": "Sincronización completada" if result.returncode == 0 else "Error en sincronización"}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "message": "Tiempo de espera agotado"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-
-@app.post("/api/group")
-def trigger_group():
-    """Trigger a fast group crawl (backwards-compat, non-streaming)."""
-    script = str(Path(__file__).parent / "main.py")
-    try:
-        result = subprocess.run(
-            [sys.executable, script, "group"],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(Path(__file__).parent),
-        )
-        return {"success": result.returncode == 0, "message": "Grupo actualizado" if result.returncode == 0 else "Error al actualizar grupo"}
-    except subprocess.TimeoutExpired:
-        return {"success": False, "message": "Tiempo de espera agotado"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
 
 
 @app.post("/api/crawl")
@@ -533,7 +494,38 @@ def get_crawl_runs_endpoint(_: dict = Depends(require_admin)):
             r['error_log'] = json.loads(r['error_log']) if r.get('error_log') else []
         except Exception:
             r['error_log'] = []
+        try:
+            r['error_breakdown'] = json.loads(r['error_breakdown']) if r.get('error_breakdown') else None
+        except Exception:
+            r['error_breakdown'] = None
     return {"runs": runs}
+
+
+@app.get("/api/crawl/health")
+def get_crawl_health(_: dict = Depends(require_admin)):
+    """Tendencia de errores de los últimos 7 crawls — para alertar sobre drift o degradación."""
+    runs = database.get_crawl_runs(limit=7)
+    totals = {"ssl": 0, "timeout": 0, "parse": 0, "auth": 0, "other": 0}
+    runs_summary = []
+    for r in runs:
+        try:
+            br = json.loads(r['error_breakdown']) if r.get('error_breakdown') else {}
+        except Exception:
+            br = {}
+        for k, v in br.items():
+            totals[k] = totals.get(k, 0) + (v or 0)
+        runs_summary.append({
+            "started_at": r.get("started_at"),
+            "status": r.get("status"),
+            "errors_count": r.get("errors_count") or 0,
+            "breakdown": br,
+        })
+    return {
+        "runs": runs_summary,
+        "totals_last7": totals,
+        "ok_runs": sum(1 for r in runs_summary if r["status"] == "ok"),
+        "total_runs": len(runs_summary),
+    }
 
 
 @app.get("/api/players")

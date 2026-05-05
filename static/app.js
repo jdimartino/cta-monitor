@@ -380,8 +380,9 @@ function navigateTo(viewId, _noPush = false) {
         fetchRivalTeams();
     }
     else if (viewId === 'admin') {
-        if (!currentUser?.is_admin) { navigateTo('posiciones', true); return; }
+        if (!currentUser || currentUser.role !== 'admin') { navigateTo('posiciones', true); return; }
         loadAdminUsers();
+        loadCrawlRuns();
         loadCrawlErrors();
     }
     else if (viewId === 'refuerzos') initRefuerzosView();
@@ -621,7 +622,7 @@ function appendLog(text, type = 'normal') {
 
 function startSSE(url, btnId, btnIdleHTML, title) {
     // Disable all action buttons while running
-    ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+    ['crawlBtn', 'smartCrawlBtn'].forEach(id => {
         const b = document.getElementById(id);
         if (b) b.disabled = true;
     });
@@ -671,7 +672,7 @@ function startSSE(url, btnId, btnIdleHTML, title) {
             _activeSSE = null;
 
             // Re-enable buttons
-            ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+            ['crawlBtn', 'smartCrawlBtn'].forEach(id => {
                 const b = document.getElementById(id);
                 if (b) b.disabled = false;
             });
@@ -697,35 +698,12 @@ function startSSE(url, btnId, btnIdleHTML, title) {
         statusEl.className = 'log-status done-error';
         es.close();
         _activeSSE = null;
-        ['syncBtn','groupBtn','crawlBtn'].forEach(id => {
+        ['crawlBtn', 'smartCrawlBtn'].forEach(id => {
             const b = document.getElementById(id);
             if (b) b.disabled = false;
         });
         if (btn) btn.innerHTML = btnIdleHTML;
     };
-}
-
-// ─────────────────────────────────────────────
-// SINCRONIZACIÓN
-// ─────────────────────────────────────────────
-function syncData() {
-    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
-    startSSE(
-        '/api/sync/stream',
-        'syncBtn',
-        '<i class="ri-refresh-line"></i> Sincronizar',
-        'Sincronizar — Posiciones + Equipo propio'
-    );
-}
-
-function groupSync() {
-    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
-    startSSE(
-        '/api/group/stream',
-        'groupBtn',
-        '<i class="ri-calendar-check-line"></i> Actualizar Grupo',
-        'Actualizar Grupo — Posiciones + Fixture'
-    );
 }
 
 function crawlFull() {
@@ -735,6 +713,16 @@ function crawlFull() {
         'crawlBtn',
         '<i class="ri-database-2-line"></i> Crawl Completo',
         'Crawl Completo — Todas las categorías + jugadores'
+    );
+}
+
+function crawlSmart() {
+    if (currentUser?.role !== 'admin') { showLoginOverlay(); return; }
+    startSSE(
+        '/api/crawl/smart',
+        'smartCrawlBtn',
+        '<i class="ri-flashlight-line"></i> Crawl Inteligente',
+        'Crawl Inteligente — Solo jugadores con cambios'
     );
 }
 
@@ -1097,7 +1085,16 @@ function renderPlayerRoster(players, containerId = 'playerRoster') {
         return;
     }
 
-    const rows = players.map(p => {
+    const sorted = [...players].sort((a, b) => {
+        const ra = a.ranking ?? a.stats?.ranking ?? null;
+        const rb = b.ranking ?? b.stats?.ranking ?? null;
+        if (ra === null && rb === null) return 0;
+        if (ra === null) return 1;
+        if (rb === null) return -1;
+        return Number(rb) - Number(ra);
+    });
+
+    const rows = sorted.map(p => {
         const s = p.stats || {};
         const mw  = s.matches_won  ?? '-';
         const ml  = s.matches_lost ?? '-';
@@ -2192,6 +2189,51 @@ async function deleteUser(id, username) {
         if (!res.ok) { const d = await res.json(); alert(d.detail || 'Error'); return; }
         loadAdminUsers();
     } catch { alert('Error de red'); }
+}
+
+// ─────────── ADMIN: Historial de Crawls ───────────
+async function loadCrawlRuns() {
+    const container = document.getElementById('crawlRunsContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-spinner"></div>';
+    try {
+        const res  = await authFetch('/api/crawl/runs');
+        const data = await res.json();
+        const runs = data.runs || [];
+        if (!runs.length) {
+            container.innerHTML = '<p class="empty-state-msg" style="font-size:13px;">Sin crawls registrados aún. El próximo Crawl Completo quedará aquí.</p>';
+            return;
+        }
+        container.innerHTML = runs.map(r => {
+            const start  = new Date(r.started_at + 'Z');
+            const end    = new Date(r.finished_at + 'Z');
+            const durMin = Math.round((end - start) / 60000);
+            const isOk   = r.status === 'ok';
+            const errorsHtml = (r.error_log || []).map(e =>
+                `<details class="crawl-error-item">
+                    <summary class="crawl-error-summary">
+                        <i class="ri-error-warning-line"></i>
+                        <span>${e.split('\n')[0].slice(0, 120)}</span>
+                    </summary>
+                    <pre class="crawl-error-pre">${e.replace(/</g, '&lt;')}</pre>
+                </details>`
+            ).join('');
+            return `
+            <details class="crawl-run-item">
+                <summary class="crawl-run-summary">
+                    <span class="run-status-dot ${isOk ? 'ok' : 'err'}"></span>
+                    <span class="run-date">${start.toLocaleString('es-VE', {timeZone: 'America/Caracas'})}</span>
+                    <span class="run-stats">${r.teams ?? '—'} eq · ${r.players ?? '—'} jug · ${r.pages ?? '—'} pág · ${durMin}min</span>
+                    ${(r.errors_count > 0) ? `<span class="run-err-badge">${r.errors_count} err</span>` : ''}
+                </summary>
+                <div class="crawl-run-detail">
+                    ${errorsHtml || '<p style="font-size:12px;color:var(--accent-green);padding:8px 0;margin:0;">✓ Sin errores en este crawl.</p>'}
+                </div>
+            </details>`;
+        }).join('');
+    } catch {
+        container.innerHTML = '<p class="empty-state-msg">Error al cargar historial.</p>';
+    }
 }
 
 // ─────────── ADMIN: Errores del Crawl ───────────

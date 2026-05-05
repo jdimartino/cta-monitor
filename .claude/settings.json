@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/bin/pip show *)",
+      "Bash(venv/bin/pip install *)",
+      "Bash(/usr/local/bin/python3 --version)",
+      "Bash(/usr/local/bin/python3 -c \"import ssl; print\\(ssl.OPENSSL_VERSION\\)\")",
+      "Bash(venv/bin/pip freeze *)",
+      "Bash(venv/bin/python3 -c ' *)",
+      "Bash(/usr/local/bin/python3 -c ' *)",
+      "Bash(curl -sv --max-time 10 -A \"Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/124.0.0.0 Safari/537.36\" https://ctatenis.com/)"
+    ]
+  }
+}

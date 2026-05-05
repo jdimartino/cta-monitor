@@ -8,10 +8,13 @@ Dynamically discovers teams, players, and match data from ctatenis.com.
 from __future__ import annotations
 
 import json
+import random
 import re
 import hashlib
 import logging
 import threading
+import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -23,6 +26,41 @@ import database
 
 logger = logging.getLogger("spider")
 
+# ── Stealth crawl ─────────────────────────────
+_stealth_req_count = 0
+_recent_errors: deque[bool] = deque(maxlen=30)  # ventana deslizante: True = request con error
+
+def _stealth_break(had_error: bool = False):
+    """Pausa periódica adaptativa: corta si el servidor va limpio, larga si hay errores.
+
+    Sin errores en últimas 30 requests → 25% de CRAWL_BREAK_SECS (~45s).
+    Algún error                        → 100% de CRAWL_BREAK_SECS (~3min).
+    ≥15% de errores                    → 200% de CRAWL_BREAK_SECS (~6min).
+    """
+    global _stealth_req_count
+    _stealth_req_count += 1
+    _recent_errors.append(had_error)
+
+    if config.CRAWL_BREAK_EVERY > 0 and _stealth_req_count % config.CRAWL_BREAK_EVERY == 0:
+        n_errors = sum(_recent_errors)
+        n_total  = len(_recent_errors)
+        rate     = n_errors / n_total if n_total else 0
+
+        if rate >= 0.15:
+            factor, label = 2.0, "larga"
+        elif n_errors > 0:
+            factor, label = 1.0, "normal"
+        else:
+            factor, label = 0.25, "corta"
+
+        pause = config.CRAWL_BREAK_SECS * factor * random.uniform(0.8, 1.2)
+        logger.info(
+            f"[stealth] Pausa {label} {pause/60:.1f}min "
+            f"(errores {n_errors}/{n_total} = {rate:.0%}) tras {_stealth_req_count} reqs"
+        )
+        time.sleep(pause)
+
+# ─────────────────────────────────────────────
 # Patrones de fecha ordenados de más específico a más general
 _DATE_PATTERNS = [
     re.compile(r"\d{4}-\d{2}-\d{2}"),                                   # 2026-04-14
@@ -169,10 +207,12 @@ def parse_team_page(html: str) -> dict:
         "recent_form": None,
         "bye_teams": [],
         "standings": [], "fixtures": [], "players": [],
+        "_layout": None,  # "new" | "legacy" | None — para detección de drift
     }
 
     # ── Hero (new design) ──
     hero = soup.select_one(".team-hero")
+    result["_layout"] = "new" if hero else "legacy"
     if hero:
         code_el = hero.select_one(".team-hero-code, .team-hero-tile")
         if code_el:
@@ -562,6 +602,7 @@ def parse_player_page(html: str) -> dict:
         "email": None, "phone": None, "cedula": None, "birth_date": None,
         "chips": [], "estado": None, "modalidades": None,
         "ranking_delta": None, "ranking_history": [],
+        "_layout": "new" if soup.select_one(".profile-name") else "legacy",
     }
 
     # ── Header (new design) ──
@@ -882,6 +923,36 @@ def _page_hash(html: str) -> str:
     return hashlib.md5(html.encode()).hexdigest()
 
 
+def _validate_team_data(cta_id: int, data: dict) -> list[str]:
+    """Reporta selectores/datos faltantes en un team page parseado.
+
+    Returns:
+        Lista de strings con problemas detectados (vacío si todo OK).
+    """
+    issues = []
+    if data.get("_layout") == "legacy":
+        issues.append(f"team:{cta_id} usando layout LEGACY (selector .team-hero faltante)")
+    if not data.get("name"):
+        issues.append(f"team:{cta_id} sin name (.team-hero-code/.team-hero-tile falló)")
+    if not data.get("standings"):
+        issues.append(f"team:{cta_id} sin standings (tabla 0 vacía)")
+    if not data.get("players"):
+        issues.append(f"team:{cta_id} sin roster (#jugadores-table vacío)")
+    return issues
+
+
+def _validate_player_data(cta_id: int, data: dict) -> list[str]:
+    """Reporta selectores/datos faltantes en un player page parseado."""
+    issues = []
+    if data.get("_layout") == "legacy":
+        issues.append(f"player:{cta_id} usando layout LEGACY (.profile-name faltante)")
+    if not data.get("name"):
+        issues.append(f"player:{cta_id} sin name (selectores .profile-name/h1/h2 fallaron)")
+    if data.get("ranking") is None:
+        issues.append(f"player:{cta_id} sin ranking (.profile-rank .value falló)")
+    return issues
+
+
 def crawl_standings(session, liga_id: int = None, cat_id: int = None) -> list[dict]:
     """Fetch and parse standings page. Upsert teams into DB."""
     liga_id = liga_id or config.LIGA_ID
@@ -936,9 +1007,10 @@ def crawl_standings(session, liga_id: int = None, cat_id: int = None) -> list[di
     return teams
 
 
-def crawl_team(session, team_cta_id: int) -> dict:
+def crawl_team(session, team_cta_id: int, incremental: bool = False) -> dict:
     """Fetch and parse a team page. Upsert players and matches."""
-    url = f"{config.BASE_URL}/cts/team_d/{team_cta_id}/"
+    url      = f"{config.BASE_URL}/cts/team_d/{team_cta_id}/"
+    url_path = f"/cts/team_d/{team_cta_id}/"
     logger.info(f"Crawling team {team_cta_id}: {url}")
 
     resp = auth.authenticated_get(session, url)
@@ -946,13 +1018,22 @@ def crawl_team(session, team_cta_id: int) -> dict:
         logger.error(f"Failed to fetch team page: {team_cta_id}")
         return {}
 
-    html = resp.text
+    html   = resp.text
     page_h = _page_hash(html)
+    data   = parse_team_page(html)  # parsear siempre — player list se necesita en Paso 3
 
-    database.set_url(f"/cts/team_d/{team_cta_id}/", "team", team_cta_id)
-    database.update_url_hash(f"/cts/team_d/{team_cta_id}/", page_h)
+    database.set_url(url_path, "team", team_cta_id)
 
-    data = parse_team_page(html)
+    if incremental and not database.needs_rescrape(url_path, page_h):
+        logger.debug(f"[Skip] Team {team_cta_id} sin cambios")
+        database.update_url_hash(url_path, page_h)
+        return {"_skipped": True, "players": data.get("players", [])}
+
+    database.update_url_hash(url_path, page_h)
+
+    # Validar selectores — loguear WARNING si hay drift de HTML
+    for issue in _validate_team_data(team_cta_id, data):
+        logger.warning(f"[Parse] {issue}")
 
     # Get the team's DB ID
     team = database.get_team(team_cta_id)
@@ -1045,6 +1126,10 @@ def crawl_player(session, player_cta_id: int, incremental: bool = False) -> dict
 
     data = parse_player_page(html)
 
+    # Validar selectores — loguear WARNING si hay drift de HTML
+    for issue in _validate_player_data(player_cta_id, data):
+        logger.warning(f"[Parse] {issue}")
+
     # Update player name only if it's a real name (not a generic page title)
     _GENERIC_NAMES = {"perfil de afiliado", "perfil", "jugador", "player profile"}
     player = database.get_player(player_cta_id)
@@ -1112,6 +1197,7 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
         teams_in_cat = crawl_standings(session, config.LIGA_ID, cat["id"])
         all_teams.extend(teams_in_cat)
         pages_scraped += 1
+        _stealth_break(had_error=not teams_in_cat)
 
     teams = all_teams
     summary["teams_found"] = len(teams)
@@ -1129,21 +1215,28 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             break
 
         try:
-            team_result = crawl_team(session, cta_id)
-            pages_scraped += 1
+            team_result = crawl_team(session, cta_id, incremental=incremental)
+            skipped    = team_result.get("_skipped", False)
+            had_error  = not team_result
+            if not skipped:
+                pages_scraped += 1
+                _stealth_break(had_error=had_error)
             players = team_result.get("players", [])
             all_players.extend(players)
-            print(f"  [{pages_scraped}] {team_data.get('name', cta_id)}: {len(players)} jugadores")
+            tag = "(sin cambios)" if skipped else f"{len(players)} jugadores"
+            print(f"  [{pages_scraped}] {team_data.get('name', cta_id)}: {tag}")
         except Exception as e:
             summary["team_errors"] += 1
+            _stealth_break(had_error=True)
             logger.exception(f"[Crawl] Error procesando equipo {cta_id} ({team_data.get('name', '')})")
             print(f"  ERROR equipo {cta_id} ({team_data.get('name', '')}): {e}")
             continue
 
     summary["players_found"] = len(all_players)
 
-    # Step 3: Crawl each player — 2 workers en paralelo, sesión propia por thread
-    _num_workers = 2
+    # Step 3: Crawl each player — 1 worker secuencial para evitar rate-limiting del servidor.
+    # Con 2 workers el servidor detecta el volumen y bloquea con 403/SSLEOFError.
+    _num_workers = 1
     print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores ({_num_workers} en paralelo)...")
     _lock           = threading.Lock()
     _p_counts       = {"scraped": 0, "errors": 0}
@@ -1162,11 +1255,15 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             t_session = _get_thread_session()
             result    = crawl_player(t_session, pid, incremental=incremental)
             skipped   = isinstance(result, dict) and result.get("_skipped")
+            had_error = not result
+            if not skipped:
+                _stealth_break(had_error=had_error)
             with _lock:
                 _p_counts["scraped"] += 1
                 tag = "(sin cambios)" if skipped else "✓"
                 print(f"  [{_p_counts['scraped']}/{len(all_players)}] {name} {tag}")
         except Exception as e:
+            _stealth_break(had_error=True)
             with _lock:
                 _p_counts["scraped"] += 1
                 _p_counts["errors"]  += 1

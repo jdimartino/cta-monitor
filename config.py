@@ -45,9 +45,16 @@ else:
     print(f"   → La contraseña del admin es: {ADMIN_PASSWORD}")
     print("   → Defínela en .env como ADMIN_PASSWORD=tu_contraseña para que sea permanente.")
 
-# ── Rate limiting ──
+# ── Rate limiting (legacy, usado solo como fallback) ──
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "1.0"))
 MAX_PAGES_PER_CRAWL = int(os.getenv("MAX_PAGES_PER_CRAWL", "500"))
+
+# ── Stealth crawl timing (simula navegación humana) ──
+CRAWL_DELAY_MIN   = float(os.getenv("CRAWL_DELAY_MIN",  "8.0"))   # segundos mínimo entre requests
+CRAWL_DELAY_MAX   = float(os.getenv("CRAWL_DELAY_MAX",  "15.0"))  # segundos máximo
+CRAWL_BREAK_EVERY = int(os.getenv("CRAWL_BREAK_EVERY",  "25"))    # pausa larga cada N requests
+CRAWL_BREAK_SECS  = int(os.getenv("CRAWL_BREAK_SECS",   "180"))   # duración pausa (seg)
+STALE_AFTER_HOURS = int(os.getenv("STALE_AFTER_HOURS",  "20"))    # saltar URLs crawleadas hace < N horas
 
 # ── Known IDs (configurable) ──
 OWN_TEAM_ID  = int(os.getenv("OWN_TEAM_ID",  "7361"))

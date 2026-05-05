@@ -256,7 +256,7 @@
                                 </div>
                                 <div>
                                     <h2>Administración</h2>
-                                    <p class="page-subtitle">Gestión de usuarios y sincronización</p>
+                                    <p class="page-subtitle">Gestión de usuarios y crawl de datos</p>
                                 </div>
                             </div>
                             <button class="primary-btn" onclick="openCreateUserModal()">
@@ -269,18 +269,19 @@
                         <div class="glass-panel">
                             <div class="panel-header">
                                 <h3>Acciones de Datos</h3>
+                                <span class="stealth-badge" title="Delays 8-15s entre requests · Pausa 3min cada 25 · No satura el servidor">
+                                    <i class="ri-shield-check-line"></i> Modo sigiloso activo
+                                </span>
                             </div>
                             <div class="admin-actions-grid">
-                                <button class="icon-btn primary-btn" id="syncBtn" onclick="syncData()">
-                                    <i class="ri-refresh-line"></i> Sincronizar
-                                </button>
-<button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Re-descarga todo sin excepción (~5 min)">
+                                <button class="icon-btn crawl-btn" id="crawlBtn" onclick="crawlFull()" title="Descarga todos los equipos y jugadores · Delays humanos · ~5-6 horas">
                                     <i class="ri-database-2-line"></i> Crawl Completo
                                 </button>
-                                <button class="icon-btn smart-crawl-btn" id="smartCrawlBtn" onclick="crawlSmart()" title="Solo actualiza jugadores con cambios — más rápido">
+                                <button class="icon-btn smart-crawl-btn" id="smartCrawlBtn" onclick="crawlSmart()" title="Solo actualiza páginas con más de 20h de antigüedad · Salta lo reciente">
                                     <i class="ri-flashlight-line"></i> Crawl Inteligente
                                 </button>
                             </div>
+                            <p class="admin-hint">El crawl completo corre toda la noche a ritmo humano (8-15s por página). Inicialo antes de dormir.</p>
                         </div>
                     </section>
 

@@ -5,12 +5,12 @@ Autor: JDM | #JDMRules
 Club Táchira 6ta B | Competencias de Tenis Amateur
 
 Uso:
-    python main.py crawl [--full]
+    python main.py crawl [--full]   # --full: completo | sin flag: inteligente (incremental)
     python main.py monitor [--force] [--loop N]
     python main.py rival TEAM_ID [--refresh]
     python main.py draw RIVAL_ID
     python main.py report
-    python main.py sync
+    python main.py healthcheck
 """
 
 from __future__ import annotations
@@ -263,78 +263,79 @@ def report():
             click.echo(f"  ID {t['cta_id']}: {t['name']}{marker}")
 
 
-@cli.command()
-def sync():
-    """Sync rapido: crawl propio equipo + proximo rival."""
+@cli.command("healthcheck")
+def healthcheck():
+    """Validar que los selectores del scraper concuerdan con el HTML actual de ctatenis.com.
+
+    Crawlea OWN_TEAM_ID y un jugador del propio equipo, valida campos críticos.
+    Exit code 0 si todo OK, 1 si hay drift de selectores o errores de red.
+    """
     import spider
     import auth
 
+    click.echo("[Healthcheck] Autenticando...")
     session = auth.get_session()
     if not session:
-        click.echo("Error: No se pudo autenticar.")
+        click.echo("[Healthcheck] FAIL: no se pudo autenticar")
         sys.exit(1)
 
-    # Always crawl standings first
-    click.echo("[Sync] Actualizando tabla de posiciones...")
-    spider.crawl_standings(session)
+    issues = []
 
-    # Crawl own team
-    click.echo(f"[Sync] Actualizando equipo propio ({config.OWN_TEAM_ID})...")
-    spider.crawl_single_team(config.OWN_TEAM_ID, session)
-
-    # Crawl all groups for own category
-    own_groups = config.GROUPS.get(config.CATEGORIA_ID, [])
-    league = database.get_league(config.LIGA_ID, config.CATEGORIA_ID)
-    league_id = league["id"] if league else None
-    for grupo_num, group_id in own_groups:
-        click.echo(f"[Sync] Actualizando grupo {group_id} (Grupo {grupo_num})...")
-        spider.crawl_group(group_id, session, league_id=league_id, grupo_num=grupo_num)
-
-    click.echo("[Sync] Completado.")
-
-
-@cli.command()
-def group():
-    """Crawl todos los grupos de la liga (posiciones + fixture por grupo)."""
-    import spider
-    import auth
-
-    session = auth.get_session()
-    if not session:
-        click.echo("Error: No se pudo autenticar.")
+    # 1. Validar team page del equipo propio
+    click.echo(f"[Healthcheck] Crawl team {config.OWN_TEAM_ID}...")
+    try:
+        team_data = spider.crawl_team(session, config.OWN_TEAM_ID)
+    except Exception as e:
+        click.echo(f"[Healthcheck] FAIL crawl_team: {e}")
         sys.exit(1)
 
-    total_standings = 0
-    total_fixtures  = 0
+    if not team_data:
+        click.echo("[Healthcheck] FAIL: crawl_team retornó vacío")
+        sys.exit(1)
 
-    for cat in config.CATEGORIES:
-        cat_id   = cat["id"]
-        cat_name = cat["name"]
-        groups   = config.GROUPS.get(cat_id, [])
-        if not groups:
-            continue
+    team_issues = spider._validate_team_data(config.OWN_TEAM_ID, team_data)
+    issues.extend(team_issues)
+    click.echo(f"  layout: {team_data.get('_layout')}")
+    click.echo(f"  name: {team_data.get('name') or '(vacío)'}")
+    click.echo(f"  standings: {len(team_data.get('standings', []))}")
+    click.echo(f"  fixtures: {len(team_data.get('fixtures', []))}")
+    click.echo(f"  players: {len(team_data.get('players', []))}")
 
-        # Obtener o crear la league en la BD
-        league = database.get_league(config.LIGA_ID, cat_id)
-        if not league:
-            league_id = database.upsert_league(
-                config.LIGA_ID, cat_id,
-                name=cat_name, gender=cat.get("gender"),
-                level=cat.get("level"), categoria_name=cat_name,
-            )
+    # 2. Validar player page (primer jugador del roster)
+    players = team_data.get("players", [])
+    if not players:
+        issues.append(f"team:{config.OWN_TEAM_ID} sin roster — no se puede testear player page")
+    else:
+        sample_player_id = players[0]["cta_id"]
+        click.echo(f"[Healthcheck] Crawl player {sample_player_id} ({players[0].get('name', '?')})...")
+        try:
+            player_data = spider.crawl_player(session, sample_player_id, incremental=False)
+        except Exception as e:
+            click.echo(f"[Healthcheck] FAIL crawl_player: {e}")
+            sys.exit(1)
+
+        if not player_data:
+            issues.append(f"player:{sample_player_id} crawl_player retornó vacío")
         else:
-            league_id = league["id"]
+            player_issues = spider._validate_player_data(sample_player_id, player_data)
+            issues.extend(player_issues)
+            click.echo(f"  layout: {player_data.get('_layout')}")
+            click.echo(f"  name: {player_data.get('name') or '(vacío)'}")
+            click.echo(f"  ranking: {player_data.get('ranking')}")
+            click.echo(f"  match_history: {len(player_data.get('match_history', []))}")
 
-        for grupo_num, group_id in groups:
-            click.echo(f"[Group] {cat_name} Grupo {grupo_num} (id={group_id})...")
-            result = spider.crawl_group(group_id, session, league_id=league_id, grupo_num=grupo_num)
-            total_standings += result.get("standings", 0)
-            total_fixtures  += result.get("fixtures", 0)
-            click.echo(f"         → {result.get('group_name','?')}: {result.get('standings',0)} pos / {result.get('fixtures',0)} fix")
-
-    click.echo(f"\n[Group] Total posiciones: {total_standings}")
-    click.echo(f"[Group] Total partidos:   {total_fixtures}")
-    click.echo("[Group] Completado.")
+    # 3. Reporte final
+    click.echo("\n" + "━" * 48)
+    if not issues:
+        click.echo("  HEALTHCHECK OK — todos los selectores funcionan ✓")
+        click.echo("━" * 48)
+        sys.exit(0)
+    else:
+        click.echo(f"  HEALTHCHECK FAIL — {len(issues)} problema(s):")
+        for issue in issues:
+            click.echo(f"    • {issue}")
+        click.echo("━" * 48)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ def get_connection():
     conn = sqlite3.connect(str(config.DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
@@ -142,6 +143,19 @@ def migrate_schema():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
+        """CREATE TABLE IF NOT EXISTS crawl_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at   TEXT NOT NULL,
+            finished_at  TEXT NOT NULL,
+            status       TEXT NOT NULL,
+            teams        INTEGER,
+            players      INTEGER,
+            pages        INTEGER,
+            errors_count INTEGER,
+            error_log    TEXT
+        )""",
+        # Migración aditiva: error_breakdown JSON ({ssl, timeout, parse, ...})
+        "ALTER TABLE crawl_runs ADD COLUMN error_breakdown TEXT",
     ]
     with get_connection() as conn:
         for sql in migrations:
@@ -398,27 +412,63 @@ def get_group_standings(group_id: int) -> list[dict]:
 
 
 def get_team_group_rivals(team_cta_id: int) -> list[dict]:
-    """Retorna todos los equipos del mismo grupo que team_cta_id, excluyéndolo."""
+    """Retorna todos los equipos del mismo grupo que team_cta_id, excluyéndolo.
+
+    Si no hay group_id (NULL o sin standings), fallback a equipos
+    de la misma categoría (categoria_name en leagues).
+    """
     with get_connection() as conn:
-        row = conn.execute(
+        # Paso 1: intentar obtener group_id desde standings
+        group_row = conn.execute(
             """SELECT s.group_id FROM standings s
                JOIN teams t ON s.team_id = t.id
                WHERE t.cta_id = ?
                ORDER BY s.id DESC LIMIT 1""",
             (team_cta_id,),
         ).fetchone()
-        if not row:
-            return []
-        group_id = row["group_id"]
-        rows = conn.execute(
-            """SELECT DISTINCT t.cta_id, t.name, l.categoria_name
-               FROM standings s
-               JOIN teams t ON s.team_id = t.id
+
+        # Paso 2: si hay group_id válido, usar agrupación por standings
+        if group_row and group_row["group_id"] is not None:
+            rows = conn.execute(
+                """SELECT DISTINCT t.cta_id, t.name, l.categoria_name
+                   FROM standings s
+                   JOIN teams t ON s.team_id = t.id
+                   LEFT JOIN leagues l ON t.league_id = l.id
+                   WHERE s.group_id = ? AND t.cta_id != ?
+                   ORDER BY t.name""",
+                (group_row["group_id"], team_cta_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        # Paso 3: fallback — equipos de la misma categoría
+        league_row = conn.execute(
+            """SELECT l.categoria_name FROM teams t
                LEFT JOIN leagues l ON t.league_id = l.id
-               WHERE s.group_id = ? AND t.cta_id != ?
-               ORDER BY t.name""",
-            (group_id, team_cta_id),
-        ).fetchall()
+               WHERE t.cta_id = ?""",
+            (team_cta_id,),
+        ).fetchone()
+
+        if league_row and league_row["categoria_name"]:
+            rows = conn.execute(
+                """SELECT DISTINCT t.cta_id, t.name, l.categoria_name
+                   FROM teams t
+                   LEFT JOIN leagues l ON t.league_id = l.id
+                   WHERE l.categoria_name = ? AND t.cta_id != ?
+                   ORDER BY t.name""",
+                (league_row["categoria_name"], team_cta_id),
+            ).fetchall()
+        else:
+            # Último recurso: mismo league_id
+            rows = conn.execute(
+                """SELECT DISTINCT t.cta_id, t.name, l.categoria_name
+                   FROM teams t
+                   LEFT JOIN leagues l ON t.league_id = l.id
+                   WHERE t.league_id = (SELECT league_id FROM teams WHERE cta_id = ?)
+                     AND t.cta_id != ?
+                   ORDER BY t.name""",
+                (team_cta_id, team_cta_id),
+            ).fetchall()
+
         return [dict(r) for r in rows]
 
 
@@ -1181,17 +1231,123 @@ def get_player_match_history(player_cta_id: int, limit: int = 20) -> list[dict]:
 def get_player_head_to_head(player_a_cta_id: int, player_b_cta_id: int) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT mr.*, m.match_date
+            """SELECT mr.*, m.match_date,
+                      hp.cta_id AS home_player_cta_id,
+                      ap.cta_id AS away_player_cta_id,
+                      hpp.cta_id AS home_partner_cta_id,
+                      app.cta_id AS away_partner_cta_id
                FROM match_rubbers mr
                JOIN matches m ON mr.match_id = m.id
-               LEFT JOIN players hp ON mr.home_player_id = hp.id
-               LEFT JOIN players ap ON mr.away_player_id = ap.id
+               LEFT JOIN players hp  ON mr.home_player_id  = hp.id
+               LEFT JOIN players ap  ON mr.away_player_id  = ap.id
+               LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+               LEFT JOIN players app ON mr.away_partner_id = app.id
                WHERE (hp.cta_id = ? AND ap.cta_id = ?)
                   OR (hp.cta_id = ? AND ap.cta_id = ?)
+                  OR (hpp.cta_id = ? AND ap.cta_id = ?)
+                  OR (hpp.cta_id = ? AND ap.cta_id = ?)
+                  OR (hp.cta_id = ? AND app.cta_id = ?)
+                  OR (hp.cta_id = ? AND app.cta_id = ?)
                ORDER BY m.match_date DESC""",
-            (player_a_cta_id, player_b_cta_id, player_b_cta_id, player_a_cta_id),
+            (
+                player_a_cta_id, player_b_cta_id,
+                player_b_cta_id, player_a_cta_id,
+                player_a_cta_id, player_b_cta_id,
+                player_b_cta_id, player_a_cta_id,
+                player_a_cta_id, player_b_cta_id,
+                player_b_cta_id, player_a_cta_id,
+            ),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_bulk_player_rankings(cta_ids: list[int]) -> dict[int, float | None]:
+    """Último ranking conocido de cada CTA ID.
+
+    Retorna dict {cta_id: ranking_float | None} para los IDs que existen.
+    """
+    if not cta_ids:
+        return {}
+    deduped = list(set(cta_ids))
+    placeholders = ",".join("?" * len(deduped))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""SELECT p.cta_id, ps.ranking
+                FROM player_stats ps
+                JOIN players p ON ps.player_id = p.id
+                WHERE p.cta_id IN ({placeholders})
+                ORDER BY ps.scraped_at DESC""",
+            deduped,
+        ).fetchall()
+    seen: set[int] = set()
+    result: dict[int, float | None] = {}
+    for r in rows:
+        cid = r["cta_id"]
+        if cid not in seen:
+            seen.add(cid)
+            val = r["ranking"]
+            result[cid] = float(val) if val is not None else None
+    for cid in deduped:
+        if cid not in result:
+            result[cid] = None
+    return result
+
+
+def get_bulk_head_to_head_matches(
+    own_cta_ids: list[int],
+    rival_cta_ids: list[int],
+) -> dict[tuple[int, int], list[dict]]:
+    """Pre-carga todos los rubbers H2H entre own_ids y rival_ids.
+
+    Retorna dict {(own_cta_id, rival_cta_id): [rubber, ...]}.
+    Cada rubber incluye: home_player_cta_id, away_player_cta_id,
+    home_partner_cta_id, away_partner_cta_id, winner, match_date.
+    """
+    if not own_cta_ids or not rival_cta_ids:
+        return {}
+    all_ids = list(set(own_cta_ids + rival_cta_ids))
+    own_set = set(own_cta_ids)
+    rival_set = set(rival_cta_ids)
+    placeholders = ",".join("?" * len(all_ids))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""SELECT mr.*, m.match_date,
+                      hp.cta_id AS home_player_cta_id,
+                      ap.cta_id AS away_player_cta_id,
+                      hpp.cta_id AS home_partner_cta_id,
+                      app.cta_id AS away_partner_cta_id
+               FROM match_rubbers mr
+               JOIN matches m ON mr.match_id = m.id
+               LEFT JOIN players hp  ON mr.home_player_id  = hp.id
+               LEFT JOIN players ap  ON mr.away_player_id  = ap.id
+               LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+               LEFT JOIN players app ON mr.away_partner_id = app.id
+               WHERE hp.cta_id IN ({placeholders})
+                  OR ap.cta_id IN ({placeholders})
+               ORDER BY m.match_date DESC""",
+            all_ids * 2,
+        ).fetchall()
+
+    from collections import defaultdict
+    result: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for row in rows:
+        d = dict(row)
+        home_players = {
+            cid for cid in
+            [d.get("home_player_cta_id"), d.get("home_partner_cta_id")]
+            if cid
+        }
+        away_players = {
+            cid for cid in
+            [d.get("away_player_cta_id"), d.get("away_partner_cta_id")]
+            if cid
+        }
+        for oid in own_set:
+            for rid in rival_set:
+                if (oid in home_players and rid in away_players) or \
+                   (oid in away_players and rid in home_players):
+                    result[(oid, rid)].append(d)
+    return dict(result)
 
 
 # ─────────────────────────────────────────────
@@ -1246,6 +1402,20 @@ def get_urls_by_type(entity_type: str) -> list[dict]:
             "SELECT * FROM url_map WHERE entity_type=?", (entity_type,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_last_scraped(url: str) -> datetime | None:
+    """Retorna el datetime del último scraping de la URL, o None si no existe."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT last_scraped FROM url_map WHERE url = ?", (url,)
+        ).fetchone()
+    if row and row["last_scraped"]:
+        try:
+            return datetime.fromisoformat(row["last_scraped"])
+        except ValueError:
+            return None
+    return None
 
 
 def needs_rescrape(url: str, new_hash: str) -> bool:
@@ -1391,3 +1561,27 @@ def update_user(user_id: int, username: str | None = None,
 def delete_user(user_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+# ─────────────────────────────────────────────
+# CRAWL RUNS
+# ─────────────────────────────────────────────
+
+def save_crawl_run(started_at, finished_at, status, teams, players, pages, errors_count, error_log, error_breakdown=None):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO crawl_runs
+               (started_at, finished_at, status, teams, players, pages, errors_count, error_log, error_breakdown)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (started_at, finished_at, status, teams, players, pages, errors_count, error_log, error_breakdown),
+        )
+
+
+def get_crawl_runs(limit: int = 30):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, started_at, finished_at, status, teams, players, pages, errors_count, error_log, error_breakdown
+               FROM crawl_runs ORDER BY started_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]

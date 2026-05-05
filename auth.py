@@ -36,12 +36,12 @@ def _build_adapter():
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
     return HTTPAdapter(
-        pool_connections=2,
-        pool_maxsize=4,
+        pool_connections=1,   # 1 sola conexión keep-alive por host — reduce handshakes TLS
+        pool_maxsize=2,
         max_retries=Retry(
-            total=3,
-            connect=3,
-            read=2,
+            total=2,
+            connect=2,
+            read=1,
             backoff_factor=2.0,
             status_forcelist=[502, 503, 504],
             allowed_methods=["GET"],
@@ -53,13 +53,7 @@ def _build_adapter():
 def create_session() -> requests.Session:
     """Create a new requests.Session with proper headers and pooled adapter."""
     session = requests.Session()
-    session.headers.update({
-        "User-Agent": config.USER_AGENT,
-        # Forzamos cierre de conexión para evitar reuso de TLS sessions rotas
-        # bajo LibreSSL 2.8.3. Coste: handshake por request, pero cero SSLEOFError
-        # de conexiones zombie en pool.
-        "Connection": "close",
-    })
+    session.headers.update({"User-Agent": config.USER_AGENT})
     adapter = _build_adapter()
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -85,7 +79,11 @@ def _get_csrf_token(session: requests.Session) -> str | None:
 
 
 def login(session: requests.Session = None) -> requests.Session | None:
-    """Authenticate against ctatenis.com. Returns authenticated session or None."""
+    """Authenticate against ctatenis.com. Returns authenticated session or None.
+
+    Reintenta el fetch del CSRF token hasta 3 veces con esperas crecientes para
+    tolerar SSL drops transientes del servidor.
+    """
     if not config.CTA_CEDULA or not config.CTA_PASSWORD:
         logger.error("Missing CTA credentials in .env")
         return None
@@ -93,7 +91,18 @@ def login(session: requests.Session = None) -> requests.Session | None:
     if session is None:
         session = create_session()
 
-    csrf_token = _get_csrf_token(session)
+    # Retry CSRF fetch — SSL drops en la página de login suelen ser transientes
+    csrf_token = None
+    for _attempt in range(3):
+        if _attempt > 0:
+            _wait = 60 * _attempt  # 60s, 120s
+            logger.info(f"[auth] Reintentando login en {_wait}s (intento {_attempt + 1}/3)...")
+            time.sleep(_wait)
+            _reset_connection_pool(session)
+        csrf_token = _get_csrf_token(session)
+        if csrf_token:
+            break
+
     if not csrf_token:
         return None
 
@@ -174,6 +183,11 @@ def _validate_session(session: requests.Session) -> bool:
             if "/accounts/login/" in location:
                 return False
         return resp.status_code == 200
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+        # SSL/connection drop durante validación → asumir válida de forma optimista.
+        # authenticated_get() manejará el re-auth si la sesión resulta expirada en el crawl.
+        logger.warning(f"[auth] SSL error validando sesión — asumiendo válida: {e}")
+        return True
     except Exception:
         return False
 
@@ -181,23 +195,23 @@ def _validate_session(session: requests.Session) -> bool:
 def get_session() -> requests.Session | None:
     """Main entry point. Try saved session, validate, re-login if needed.
 
-    Optimizaciones:
-    - Si la sesión es muy fresca (<5 min), saltea validación (request extra innecesario).
-    - Si la sesión es vieja (>2h, mitad del TTL), refresca proactivamente para
-      reducir riesgo de re-login mid-crawl.
+    - Sesión fresca (<5 min): saltar validación.
+    - Sesión existente: validar siempre. Si hay SSL error durante validación se asume válida.
+    - Sin sesión o sesión inválida: hacer login fresh con reintentos.
+
+    Nota: el refresh proactivo por edad fue eliminado — causaba que un SSL drop en login
+    descartara una sesión todavía válida. authenticated_get() maneja re-auth mid-crawl.
     """
     session = load_session()
     if session:
         age = _session_age_seconds() or 0
-        # Refresh proactivo a la mitad del TTL — evita expiry mid-crawl
-        if age > (config.SESSION_MAX_AGE_HOURS * 3600) / 2:
-            logger.info(f"Session age {age/60:.0f}min > half-TTL — refreshing proactively")
-        elif age < 300:
+        if age < 300:
             logger.info("Using cached session (fresh, skipping validation)")
             return session
-        elif _validate_session(session):
-            logger.info("Using cached session")
+        if _validate_session(session):
+            logger.info(f"Using cached session ({age/60:.0f}min old)")
             return session
+        logger.info(f"Session inválida ({age/60:.0f}min) — haciendo login fresh...")
 
     logger.info("Logging in fresh...")
     return login()
@@ -240,17 +254,24 @@ def authenticated_get(
                     new_session = login(session)
                     if not new_session:
                         return None
-                    time.sleep(config.REQUEST_DELAY)
+                    time.sleep(random.uniform(config.CRAWL_DELAY_MIN, config.CRAWL_DELAY_MAX))
                     continue
                 else:
                     logger.error("Could not re-authenticate after retries")
                     return None
 
-            time.sleep(config.REQUEST_DELAY)
+            time.sleep(random.uniform(config.CRAWL_DELAY_MIN, config.CRAWL_DELAY_MAX))
             return resp
 
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
+            if status == 403 and attempt < max_retries:
+                # 403 = servidor nos rate-limitó. Pausa larga para dejar pasar la ventana.
+                wait = 90 if attempt == 0 else 180
+                logger.warning(f"HTTP 403 (rate-limited), esperando {wait}s antes de reintentar")
+                time.sleep(wait)
+                _reset_connection_pool(session)
+                continue
             if status in (429, 503) and attempt < max_retries:
                 wait = min(config.REQUEST_DELAY * (2 ** attempt), 60)
                 logger.warning(f"HTTP {status}, backing off {wait}s")
