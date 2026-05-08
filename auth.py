@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pickle
 import random
+import ssl
 import time
 import logging
 from datetime import datetime
@@ -23,10 +24,13 @@ logger = logging.getLogger("auth")
 def _build_adapter():
     """HTTPAdapter con pool y retry de urllib3 dentro del propio adapter.
 
-    Why: LibreSSL 2.8.3 (macOS system Python) tiene bugs conocidos con session
+    Why: LibreSSL (macOS system Python) tiene bugs conocidos con session
     resumption de TLS — conexiones keep-alive pueden quedar en estado roto y
     reusarse causando SSLEOFError(_ssl.c:1129). El adapter limita el pool y
     permite retries de HTTP antes de que la excepción suba a la app.
+
+    El SSLContext fuerza TLS 1.2 y deshabilita session tickets para evitar
+    EOF-in-violation-of-protocol que causa LibreSSL al reusar tickets corruptos.
 
     NOTE: SSLError NO se incluye en raise_on_status porque queremos que los
     reintentos SSL los gestione el loop de authenticated_get (con reset de pool
@@ -35,7 +39,20 @@ def _build_adapter():
     """
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
-    return HTTPAdapter(
+
+    import certifi
+
+    class _TLSAdapter(HTTPAdapter):
+        def init_poolmanager(self, *args, **kwargs):
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            if hasattr(ssl, 'TLSVersion'):
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            if hasattr(ssl, 'OP_NO_TICKET'):
+                ctx.options |= ssl.OP_NO_TICKET
+            kwargs['ssl_context'] = ctx
+            return super().init_poolmanager(*args, **kwargs)
+
+    return _TLSAdapter(
         pool_connections=1,   # 1 sola conexión keep-alive por host — reduce handshakes TLS
         pool_maxsize=2,
         max_retries=Retry(
@@ -283,7 +300,9 @@ def authenticated_get(
             if attempt < max_retries:
                 # Backoff exponencial con jitter para evitar thundering herd
                 # en crawls paralelos (todos los threads fallan al mismo tiempo).
-                base_wait = min(config.REQUEST_DELAY * (2 ** attempt), 45)
+                # Usamos CRAWL_DELAY_MIN como base (8s por defecto) para no bombardear
+                # el servidor cuando ya está inestable.
+                base_wait = min(config.CRAWL_DELAY_MIN * (2 ** attempt), 60)
                 jitter = random.uniform(0, base_wait * 0.4)
                 wait = base_wait + jitter
                 logger.warning(

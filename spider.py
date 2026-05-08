@@ -1032,7 +1032,8 @@ def crawl_team(session, team_cta_id: int, incremental: bool = False) -> dict:
     database.update_url_hash(url_path, page_h)
 
     # Validar selectores — loguear WARNING si hay drift de HTML
-    for issue in _validate_team_data(team_cta_id, data):
+    data["_validation_issues"] = _validate_team_data(team_cta_id, data)
+    for issue in data["_validation_issues"]:
         logger.warning(f"[Parse] {issue}")
 
     # Get the team's DB ID
@@ -1127,7 +1128,8 @@ def crawl_player(session, player_cta_id: int, incremental: bool = False) -> dict
     data = parse_player_page(html)
 
     # Validar selectores — loguear WARNING si hay drift de HTML
-    for issue in _validate_player_data(player_cta_id, data):
+    data["_validation_issues"] = _validate_player_data(player_cta_id, data)
+    for issue in data["_validation_issues"]:
         logger.warning(f"[Parse] {issue}")
 
     # Update player name only if it's a real name (not a generic page title)
@@ -1183,7 +1185,7 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             return {"error": "Could not authenticate"}
 
     database.init_db()
-    summary = {"teams_found": 0, "players_found": 0, "pages_scraped": 0, "team_errors": 0, "player_errors": 0}
+    summary = {"teams_found": 0, "players_found": 0, "pages_scraped": 0, "team_errors": 0, "player_errors": 0, "connection_errors": 0, "parse_warnings": 0}
     pages_scraped = 0
     page_limit = max_pages  # None = sin límite; el check `if page_limit` lo maneja
 
@@ -1224,9 +1226,17 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             players = team_result.get("players", [])
             all_players.extend(players)
             tag = "(sin cambios)" if skipped else f"{len(players)} jugadores"
+            if not team_result:
+                summary["connection_errors"] += 1
+            else:
+                issues = team_result.get("_validation_issues", [])
+                summary["parse_warnings"] += len(issues)
+                if issues:
+                    tag += " ⚠"
             print(f"  [{pages_scraped}] {team_data.get('name', cta_id)}: {tag}")
         except Exception as e:
             summary["team_errors"] += 1
+            summary["connection_errors"] += 1
             _stealth_break(had_error=True)
             logger.exception(f"[Crawl] Error procesando equipo {cta_id} ({team_data.get('name', '')})")
             print(f"  ERROR equipo {cta_id} ({team_data.get('name', '')}): {e}")
@@ -1239,7 +1249,7 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
     _num_workers = 1
     print(f"[Spider] Paso 3: Crawling {len(all_players)} jugadores ({_num_workers} en paralelo)...")
     _lock           = threading.Lock()
-    _p_counts       = {"scraped": 0, "errors": 0}
+    _p_counts       = {"scraped": 0, "errors": 0, "connection_errors": 0, "parse_warnings": 0}
     _failed_players = []
     _thread_local   = threading.local()
 
@@ -1260,7 +1270,14 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
                 _stealth_break(had_error=had_error)
             with _lock:
                 _p_counts["scraped"] += 1
-                tag = "(sin cambios)" if skipped else "✓"
+                if not result:
+                    _p_counts["connection_errors"] += 1
+                    tag = "✗ CONN"
+                else:
+                    issues = result.get("_validation_issues", [])
+                    _p_counts["parse_warnings"] += len(issues)
+                    tag = f"✓ ({len(issues)} warnings)" if issues else "✓"
+                tag = "(sin cambios)" if skipped else tag
                 print(f"  [{_p_counts['scraped']}/{len(all_players)}] {name} {tag}")
         except Exception as e:
             _stealth_break(had_error=True)
@@ -1288,16 +1305,26 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
             try:
                 result  = crawl_player(session, pid, incremental=False)
                 skipped = isinstance(result, dict) and result.get("_skipped")
-                tag = "(sin cambios)" if skipped else "✓"
+                if not result:
+                    summary["connection_errors"] += 1
+                    tag = "✗ CONN"
+                else:
+                    issues = result.get("_validation_issues", [])
+                    summary["parse_warnings"] += len(issues)
+                    tag = "✓" if not issues else f"✓ ({len(issues)} warnings)"
+                tag = "(sin cambios)" if skipped else tag
                 print(f"  [retry {i}/{len(_failed_players)}] {name} {tag}")
             except Exception as e:
                 retry_errors += 1
+                summary["connection_errors"] += 1
                 logger.error(f"[Crawl] Retry fallido jugador {pid} ({name}): {e}")
                 print(f"  [retry {i}/{len(_failed_players)}] ERROR {name}: {e}")
         summary["player_errors"] = retry_errors
         print(f"  Segunda pasada completada: {len(_failed_players) - retry_errors}/{len(_failed_players)} recuperados")
     else:
         summary["player_errors"] = _p_counts["errors"]
+        summary["connection_errors"] += _p_counts.get("connection_errors", 0)
+        summary["parse_warnings"] += _p_counts.get("parse_warnings", 0)
 
     summary["pages_scraped"] = pages_scraped
     total_errors = summary["team_errors"] + summary["player_errors"]
@@ -1305,19 +1332,28 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
     print(f"\n{'━' * 48}")
     print(f"  RESUMEN DEL CRAWL COMPLETO")
     print(f"{'━' * 48}")
-    print(f"  Equipos procesados   : {summary['teams_found']}")
-    print(f"  Jugadores procesados : {summary['players_found']}")
+    print(f"  Equipos encontrados  : {summary['teams_found']}")
+    print(f"  Jugadores encontrados: {summary['players_found']}")
     print(f"  Páginas scrapeadas   : {summary['pages_scraped']}")
-    if total_errors == 0:
-        print(f"  Errores encontrados  : 0  ✓")
+
+    conn_errors     = summary.get("connection_errors", 0)
+    parse_warnings  = summary.get("parse_warnings", 0)
+
+    if total_errors == 0 and parse_warnings == 0:
+        print(f"  {'✅ Todos los datos extraídos correctamente — 0 errores, 0 advertencias'}")
     else:
-        print(f"  Errores encontrados  : {total_errors}  ⚠")
-        if summary["team_errors"]:
-            print(f"    • Equipos con error : {summary['team_errors']}")
-        if summary["player_errors"]:
-            print(f"    • Jugadores con error: {summary['player_errors']}")
+        if conn_errors > 0:
+            print(f"  ❌ Errores de conexión  : {conn_errors}")
+        if parse_warnings > 0:
+            print(f"  ⚠️  Advertencias de parseo: {parse_warnings}")
+        if conn_errors > 0 and parse_warnings == 0:
+            print(f"  ℹ️  Solo errores de conexión (SSL/red) — los datos extraídos están completos")
+        elif parse_warnings > 0 and conn_errors == 0:
+            print(f"  ⚠️  Posibles cambios en el HTML de ctatenis.com — revisar selectores")
+        elif parse_warnings > 0 and conn_errors > 0:
+            print(f"  ⚠️  Errores mixtos: conexión + posibles cambios de HTML")
     print(f"{'━' * 48}")
-    print(f"__SUMMARY__teams={summary['teams_found']}|players={summary['players_found']}|pages={summary['pages_scraped']}|errors={total_errors}")
+    print(f"__SUMMARY__teams={summary['teams_found']}|players={summary['players_found']}|pages={summary['pages_scraped']}|errors={total_errors}|conn={conn_errors}|parse={parse_warnings}")
     return summary
 
 

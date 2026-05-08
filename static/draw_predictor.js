@@ -25,6 +25,8 @@
   window.DrawPredictor = {
     load,
     refresh: () => load(_rivalId, _ownTeamId),
+    showForcedPanel: showForcedPanel,
+    calcForcedDraw: calcForcedDraw,
   };
 
   /* ═══════════════════════════════
@@ -67,7 +69,7 @@
 
       _ownPlayers = ownPlayers;
       container.innerHTML = _render(main, timeData, hm, h2h);
-      _bindEvents(container);
+      _bindEvents(container, ownPlayers);
 
     } catch (e) {
       container.innerHTML = `<p class="dp-error">Error al calcular: ${e.message}</p>`;
@@ -89,6 +91,12 @@
       <div class="dp-root">
         ${_renderSummary(rival, main.low_data, alerts.length)}
         ${_renderAvailability()}
+        <div class="dp-controls">
+          <button class="dp-mode-btn" onclick="window.DrawPredictor.showForcedPanel()" title="Modo Draw Forzado: elige manualmente la alineación">
+            <i class="ri-hand-coin-line"></i> Draw Forzado
+          </button>
+        </div>
+        <div id="dp-forced-container"></div>
         <div class="dp-grid">
           ${_renderPrediction(prediction)}
           ${_renderSuggestion(suggestion)}
@@ -129,6 +137,47 @@
     `;
   }
 
+  /* ── Explicación detallada (predicción rival) ── */
+  function _renderPredExplain(slot) {
+    const lines = [];
+    const names = (slot.players || []).map(p => p.name).join(' y ');
+
+    if (names && slot.candidates && slot.candidates.length > 0) {
+      const top = slot.candidates[0];
+      if (slot.type === 'doubles') {
+        if (top.appearances === 1)
+          lines.push(`Jugaron juntos en ${slot.slot} por primera vez en el último partido.`);
+        else
+          lines.push(`Han jugado juntos en ${slot.slot} en ${top.appearances} de los últimos partidos.`);
+      } else {
+        if (top.appearances === 1)
+          lines.push(`Jugó en ${slot.slot} por primera vez en el último partido.`);
+        else
+          lines.push(`Ha jugado en ${slot.slot} en ${top.appearances} de los últimos partidos.`);
+      }
+    }
+
+    if (slot.badge === 'fija') {
+      lines.push('Posición consolidada: alta probabilidad de que repitan esta alineación.');
+    } else if (slot.badge === 'rotativa') {
+      lines.push('Posición rotativa: el equipo suele alternar jugadores aquí.');
+      if (slot.candidates && slot.candidates.length > 1) {
+        const alt = slot.candidates[1];
+        const altNames = alt.players.map(p => p.name).join(' y ');
+        lines.push(`Alternativa frecuente: ${altNames} (${alt.appearances} partido${alt.appearances !== 1 ? 's' : ''}).`);
+      }
+    } else {
+      lines.push('Sin patrón claro: no hay suficientes datos para determinar una tendencia.');
+    }
+
+    if (slot.low_data) {
+      lines.push('⚠️ Datos limitados: hay menos de 3 partidos de historial, la predicción tiene baja certeza.');
+    }
+
+    if (!lines.length) return '';
+    return `<div class="dp-explain-block dp-explain-rival">${lines.map(l => `<p>${l}</p>`).join('')}</div>`;
+  }
+
   /* ── Predicción rival ── */
   function _renderPrediction(prediction) {
     const cards = prediction.map(slot => {
@@ -146,6 +195,7 @@
             <span class="dp-slot-badge is-${badge}">${badge}</span>
           </div>
           <div class="dp-slot-players">${players || '<span class="dp-low-data">?</span>'}</div>
+          ${_renderPredExplain(slot)}
           <div class="dp-slot-footer">
             <div class="dp-conf-bar"><div class="dp-conf-fill" style="width:${conf}%"></div></div>
             <span class="dp-conf-label">${conf}%</span>
@@ -161,6 +211,38 @@
         <div class="dp-slots">${cards || '<p class="dp-no-data" style="padding:1rem">Sin datos de alineaciones anteriores.</p>'}</div>
       </div>
     `;
+  }
+
+  /* ── Explicación detallada de sugerencia propia ── */
+  function _renderSuggestExplain(slot, winPct) {
+    const lines = [];
+    const our = (slot.our_players || []).map(p => p.name).join(' + ');
+    const vs  = (slot.vs_players || []).map(p => p.name).join(' + ');
+
+    lines.push(`Enfrentamiento: ${our} vs ${vs}`);
+
+    if (winPct >= 60) {
+      lines.push(`↑ Ventaja táctica — ${winPct}% de probabilidad de ganar este punto.`);
+    } else if (winPct >= 45) {
+      lines.push(`→ Paridad táctica — ${winPct}% de probabilidad.`);
+    } else {
+      lines.push(`↓ El rival parte con ventaja — solo ${winPct}% de probabilidad de ganar.`);
+    }
+
+    if (slot.priority === 'primario') {
+      lines.push('★ Primario: punto clave para asegurar 3 de 5. Sugerimos alinear aquí a los mejores disponibles.');
+    } else {
+      lines.push('○ Secundario: puedes rotar jugadores si necesitas reforzar otro slot.');
+    }
+
+    if (slot.alternatives && slot.alternatives.length > 0) {
+      const alt = slot.alternatives.slice(0, 2).map(a =>
+        (a.players || []).map(p => p.name).join(' + ') + ` (${Math.round((a.expected_win_prob || 0) * 100)}%)`
+      ).join(' | ');
+      lines.push(`Alternativas: ${alt}`);
+    }
+
+    return `<div class="dp-explain-block dp-explain-suggest">${lines.map(l => `<p>${l}</p>`).join('')}</div>`;
   }
 
   /* ── Sugerencia propia ── */
@@ -201,7 +283,7 @@
             <div class="dp-conf-bar"><div class="dp-conf-fill" style="width:${winPct}%"></div></div>
             <span class="dp-conf-label">${winPct}% victoria</span>
           </div>
-          ${slot.reasoning ? `<div class="dp-suggest-reason">${_esc(slot.reasoning)}</div>` : ''}
+          ${slot.reasoning ? _renderSuggestExplain(slot, winPct) : ''}
         </div>
       `;
     }).join('');
@@ -400,15 +482,16 @@
     }
   }
 
-  function _bindEvents(container) {
+  function _bindEvents(container, ownPlayers) {
     const btn = container.querySelector('#dp-recalc-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const checks = container.querySelectorAll('.dp-avail-check input[type=checkbox]');
-      const selected = Array.from(checks).filter(c => c.checked).map(c => parseInt(c.value, 10));
-      _checkedIds = selected.length === _ownPlayers.length ? null : selected;
-      load(_rivalId, _ownTeamId);
-    });
+    if (btn) {
+      btn.addEventListener('click', () => {
+        const checks = container.querySelectorAll('.dp-avail-check input[type=checkbox]');
+        const selected = Array.from(checks).filter(c => c.checked).map(c => parseInt(c.value, 10));
+        _checkedIds = selected.length === ownPlayers.length ? null : selected;
+        load(_rivalId, _ownTeamId);
+      });
+    }
   }
 
   function _esc(str) {
@@ -426,6 +509,213 @@
       ? name.split(',').reverse().map(s => s.trim())
       : name.split(' ');
     return parts.slice(0, 2).join(' ');
+  }
+
+  /* ═══════════════════════════════
+     DRAW FORZADO — UI y cálculo
+  ═══════════════════════════════ */
+  function showForcedPanel() {
+    const ownPlayers = _ownPlayers || [];
+    const slots = ['D1', 'D2', 'D3', 'D4', 'S1'];
+    const maxPerSlot = { 'D1': 2, 'D2': 2, 'D3': 2, 'D4': 2, 'S1': 1 };
+
+    const slotRows = slots.map(slot => {
+      const max = maxPerSlot[slot];
+      const dropdowns = Array.from({ length: max }, (_, i) => `
+        <select class="dp-forced-select" data-slot="${slot}" data-index="${i}">
+          <option value="">${i === 0 ? 'Jugador 1' : 'Jugador 2'}</option>
+          ${ownPlayers.map(p => `<option value="${p.cta_id}">${_esc(p.name)}</option>`).join('')}
+        </select>
+      `).join('');
+
+      return `
+        <div class="dp-forced-slot-row">
+          <label class="dp-forced-slot-label">${slot}</label>
+          <div class="dp-forced-selects">${dropdowns}</div>
+        </div>
+      `;
+    }).join('');
+
+    const panel = `
+      <div class="dp-forced-panel" id="dp-forced-panel">
+        <div class="dp-forced-header">
+          <h3><i class="ri-hand-coin-line"></i> Predictor de Draw Forzado</h3>
+          <button class="dp-close-forced" onclick="document.getElementById('dp-forced-panel').remove()" title="Cerrar">✕</button>
+        </div>
+        <div class="dp-forced-body">
+          ${slotRows}
+          <button id="dp-calc-forced-btn" class="dp-calc-btn"><i class="ri-calculator-line"></i> Calcular probabilidad</button>
+        </div>
+        <div id="dp-forced-result" class="dp-forced-result"></div>
+      </div>
+    `;
+
+    const container = document.getElementById('dp-forced-container');
+    container.innerHTML = panel;
+
+    // Bind el botón de calcular
+    const calcBtn = document.querySelector('#dp-calc-forced-btn');
+    if (calcBtn) {
+      calcBtn.addEventListener('click', () => calcForcedDraw(_rivalId, _ownTeamId));
+    }
+  }
+
+  function calcForcedDraw(rivalId, ownTeamId) {
+    const slots = ['D1', 'D2', 'D3', 'D4', 'S1'];
+    const forced = {};
+
+    for (const slot of slots) {
+      const selects = document.querySelectorAll(`.dp-forced-select[data-slot="${slot}"]`);
+      const ids = Array.from(selects)
+        .map(s => parseInt(s.value, 10))
+        .filter(id => !isNaN(id));
+      if (ids.length > 0) {
+        forced[slot] = ids;
+      }
+    }
+
+    if (Object.keys(forced).length === 0) {
+      alert('Selecciona al menos un jugador en algún slot');
+      return;
+    }
+
+    const resultDiv = document.getElementById('dp-forced-result');
+    resultDiv.innerHTML = '<p style="text-align:center; color:#999;"><i class="ri-loader-4-line" style="animation: spin 1s linear infinite;"></i> Calculando...</p>';
+
+    const body = { forced, own_team: ownTeamId };
+    const token = localStorage.getItem('cta_auth_token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    };
+
+    fetch(`${API_BASE}/api/draw-predictor/${rivalId}/forced`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.detail) {
+          resultDiv.innerHTML = `<p class="dp-error">Error: ${data.detail}</p>`;
+          return;
+        }
+        resultDiv.innerHTML = _renderForcedResult(data);
+      })
+      .catch(e => {
+        resultDiv.innerHTML = `<p class="dp-error">Error: ${e.message}</p>`;
+        console.error('[ForcedDraw]', e);
+      });
+  }
+
+  function _forcedSummaryLine(slot, winPct) {
+    const us  = (slot.own_players  || []).map(p => p.name).join(' + ');
+    const vs  = (slot.rival_players || []).map(p => p.name).join(' + ');
+    const lines = [];
+
+    lines.push(`Enfrentamiento: ${us} vs ${vs}`);
+
+    if (winPct >= 60) {
+      lines.push(`↑ Ventaja clara — ${winPct}% de probabilidad de ganar este punto.`);
+    } else if (winPct >= 52) {
+      lines.push(`→ Leve ventaja — ${winPct}% de probabilidad. Margen estrecho.`);
+    } else if (winPct >= 48) {
+      lines.push(`↔ Paridad extrema — ${winPct}%. El resultado es impredecible.`);
+    } else if (winPct >= 40) {
+      lines.push(`↓ Leve desventaja — ${winPct}% de probabilidad.`);
+    } else {
+      lines.push(`↓ Desventaja clara — solo ${winPct}% de probabilidad de ganar.`);
+    }
+
+    // Extract ranking info from reasoning
+    const rankReason = (slot.reasoning || []).find(r => r.includes('Ranking'));
+    if (rankReason) lines.push(rankReason);
+
+    // Extract H2H info from reasoning
+    const h2hReason = (slot.reasoning || []).find(r => r.includes('H2H'));
+    if (h2hReason) lines.push(h2hReason);
+    else lines.push('Sin historial H2H previo entre estos jugadores.');
+
+    // Rival's consistency
+    const badge = slot.rival_badge || 'incierta';
+    const badgeLabels = {
+      fija:     'El rival suele repetir esta alineación — es su formación más confiable.',
+      rotativa: 'El rival rota esta posición frecuentemente — pueden presentar otra pareja.',
+      incierta: 'El rival no tiene un patrón definido en esta posición.',
+    };
+    lines.push(badgeLabels[badge] || badgeLabels.incierta);
+
+    if (slot.low_data) {
+      lines.push('⚠️ Datos limitados: las predicciones del rival tienen baja certeza.');
+    }
+
+    return lines.map(l => `<p>${_esc(l)}</p>`).join('');
+  }
+
+  function _renderForcedResult(data) {
+    const slots = data.slots || [];
+    const expectedWins = data.expected_wins || 0;
+    const drawProb = data.draw_win_prob || 0;
+
+    const slotRows = slots.map(slot => {
+      const our = (slot.own_players || [])
+        .map(p => `<span class="dp-player-chip own">${_esc(p.name)}</span>`)
+        .join('<span class="dp-amp"> &amp; </span>');
+
+      const vs = (slot.rival_players || [])
+        .map(p => `<span class="dp-player-chip rival">${_esc(p.name)}</span>`)
+        .join('<span class="dp-amp"> &amp; </span>');
+
+      const winPct = Math.round((slot.win_prob || 0) * 100);
+      const winClass = slot.win_prob >= 0.5 ? 'is-win' : 'is-loss';
+
+      const reasoning = (slot.reasoning || [])
+        .map(r => {
+          let cls = 'dp-reason-tag';
+          if (r.includes('ventaja')) cls += ' is-positive';
+          else if (r.includes('desventaja')) cls += ' is-negative';
+          else if (r.includes('similar')) cls += ' is-neutral';
+          else if (r.includes('H2H')) cls += ' is-h2h';
+          return `<span class="${cls}">${_esc(r)}</span>`;
+        })
+        .join('');
+
+      return `
+        <div class="dp-forced-matchup ${winClass}">
+          <div class="dp-forced-slot-name">${slot.slot}</div>
+          <div class="dp-forced-comparison">
+            <div class="dp-forced-side">${our}</div>
+            <div class="dp-vs-large">VS</div>
+            <div class="dp-forced-side rival">${vs}</div>
+          </div>
+          <div class="dp-forced-winprob">
+            <div class="dp-conf-bar"><div class="dp-conf-fill" style="width:${winPct}%"></div></div>
+            <span class="dp-conf-label">${winPct}% probabilidad de victoria</span>
+          </div>
+          <div class="dp-explain-block dp-explain-forced">
+            ${_forcedSummaryLine(slot, winPct)}
+          </div>
+          <div class="dp-forced-reasoning">${reasoning}</div>
+        </div>
+      `;
+    }).join('');
+
+    const drawProbPct = Math.round(drawProb * 100);
+    const drawClass = expectedWins >= 3 ? 'is-favorable' : expectedWins >= 2 ? 'is-neutral' : 'is-unfavorable';
+
+    return `
+      <div class="dp-forced-results-panel">
+        <div class="dp-forced-summary ${drawClass}">
+          <div class="dp-draw-wins">
+            Ganarías <strong>${expectedWins}/5</strong> posiciones
+          </div>
+          <div class="dp-draw-prob">
+            Probabilidad del draw: <strong>${drawProbPct}%</strong>
+          </div>
+        </div>
+        <div class="dp-forced-matchups">${slotRows}</div>
+      </div>
+    `;
   }
 
 })();

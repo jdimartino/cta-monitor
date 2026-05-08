@@ -1216,11 +1216,15 @@ def get_player_match_history(player_cta_id: int, limit: int = 20) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT mr.*, m.match_date, m.status,
-                      hp.name as home_player_name, ap.name as away_player_name
+                      hp.name as home_player_name, ap.name as away_player_name,
+                      hp.cta_id as home_player_cta_id, ap.cta_id as away_player_cta_id,
+                      hpp.cta_id as home_partner_cta_id, app.cta_id as away_partner_cta_id
                FROM match_rubbers mr
                JOIN matches m ON mr.match_id = m.id
                LEFT JOIN players hp ON mr.home_player_id = hp.id
                LEFT JOIN players ap ON mr.away_player_id = ap.id
+               LEFT JOIN players hpp ON mr.home_partner_id = hpp.id
+               LEFT JOIN players app ON mr.away_partner_id = app.id
                WHERE hp.cta_id = ? OR ap.cta_id = ?
                ORDER BY m.match_date DESC LIMIT ?""",
             (player_cta_id, player_cta_id, limit),

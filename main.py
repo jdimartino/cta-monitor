@@ -222,10 +222,6 @@ def rubbers(all_matches, team_cta_id, force):
 @cli.command()
 def report():
     """Generar reporte completo: tabla + proximo rival + prediccion."""
-    import rival_analyzer
-    import draw_predictor
-
-    # Standings
     standings = database.get_latest_standings()
     if standings:
         click.echo(f"\n{'='*50}")

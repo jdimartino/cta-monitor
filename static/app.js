@@ -651,10 +651,11 @@ function startSSE(url, btnId, btnIdleHTML, title) {
 
         if (msg.startsWith('__DONE__')) {
             const ok = msg === '__DONE__ok';
+            const timeout = msg === '__DONE__timeout';
             const statusEl = document.getElementById('logPanelStatus');
-            statusEl.textContent = ok ? '✓ Completado' : '✗ Error';
-            statusEl.className = 'log-status ' + (ok ? 'done-ok' : 'done-error');
-            appendLog(ok ? '— Operación completada exitosamente —' : '— Finalizó con error —', ok ? 'success' : 'error');
+            statusEl.textContent = ok ? '✓ Completado' : timeout ? '⏱ Tiempo agotado' : '✗ Error';
+            statusEl.className = 'log-status ' + (ok ? 'done-ok' : timeout ? 'done-warning' : 'done-error');
+            appendLog(ok ? '— Operación completada exitosamente —' : timeout ? '— Tiempo agotado (crawl incompleto, retomar después) —' : '— Finalizó con error —', ok ? 'success' : timeout ? 'warning' : 'error');
 
             // Mostrar resumen del crawl si está disponible
             if (_crawlSummary) {

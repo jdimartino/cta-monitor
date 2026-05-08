@@ -10,8 +10,18 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.staticfiles import StaticFiles as StaticFilesBase
+
+
+class CacheBustStaticFiles(StaticFilesBase):
+    """Sirve estáticos con headers anti-caché para que Cloudflare no los cachee."""
+    def file_response(self, *args, **kwargs) -> FileResponse:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
 import config
 import database
@@ -30,7 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", CacheBustStaticFiles(directory="static"), name="static")
 
 # ─────────────────────────────────────────────
 # AUTH: Dependencias
@@ -352,7 +362,7 @@ def _stream_command(cmd: list[str], timeout: int):
         yield "data: __DONE__error\n\n"
 
 
-def _crawl_stream_logged(cmd: list[str], timeout: int):
+def _crawl_stream_logged(cmd: list[str], timeout: int | None):
     """Like _stream_command but persists each run summary + errors to crawl_runs table."""
     started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     collected_errors: list[str] = []
@@ -383,7 +393,12 @@ def _crawl_stream_logged(cmd: list[str], timeout: int):
             yield f"data: {clean}\n\n"
 
         proc.wait()
-        status = "ok" if proc.returncode == 0 else "error"
+        if proc.returncode == 0:
+            status = "ok"
+        elif proc.returncode in (-9, -15):
+            status = "timeout"
+        else:
+            status = "error"
         finished_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
         # Categorizar errores: ssl/timeout/parse/auth/other
@@ -422,7 +437,7 @@ def crawl_stream(_: dict = Depends(require_admin)):
     """SSE stream: full crawl (all categories + all players)."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
-        _crawl_stream_logged([sys.executable, "-u", script, "crawl", "--full"], timeout=10800),
+        _crawl_stream_logged([sys.executable, "-u", script, "crawl", "--full"], timeout=None),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -435,7 +450,7 @@ def trigger_crawl():
     try:
         result = subprocess.run(
             [sys.executable, script, "crawl", "--full"],
-            capture_output=True, text=True, timeout=10800,
+            capture_output=True, text=True, timeout=43200,
             cwd=str(Path(__file__).parent),
         )
         return {"success": result.returncode == 0, "message": "Crawl completo finalizado" if result.returncode == 0 else "Error en crawl"}
@@ -479,7 +494,7 @@ def crawl_smart_stream(_: dict = Depends(require_admin)):
     """SSE stream: crawl incremental — salta jugadores sin cambios."""
     script = str(Path(__file__).parent / "main.py")
     return StreamingResponse(
-        _crawl_stream_logged([sys.executable, "-u", script, "crawl"], timeout=10800),
+        _crawl_stream_logged([sys.executable, "-u", script, "crawl"], timeout=None),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -764,6 +779,28 @@ def draw_predictor_h2h(rival_cta_id: int, own_team: Optional[int] = None, _: dic
         import config as cfg
         own_id = own_team or cfg.OWN_TEAM_ID
         return draw_predictor.get_h2h_team_vs_team(own_id, rival_cta_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/draw-predictor/{rival_cta_id}/forced")
+def draw_forced_prediction(
+    rival_cta_id: int,
+    body: dict,
+    _: dict = Depends(get_current_user),
+):
+    """Evalúa una alineación forzada por el usuario contra la predicción del rival.
+
+    Body: {"forced": {"D1": [id1, id2], "D2": [id3, id4], ..., "S1": [id5]}, "own_team": cta_id}
+    """
+    team = database.get_team(rival_cta_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Rival team not found")
+    try:
+        forced = body.get("forced", {})
+        own_team = body.get("own_team")
+        result = draw_predictor.predict_forced_lineup(rival_cta_id, forced, own_team_cta_id=own_team)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

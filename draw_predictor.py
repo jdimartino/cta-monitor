@@ -173,6 +173,14 @@ def compute_slot_consolidation(history: list[dict], slot: str) -> dict:
             if match_rank.get(entry["match_id"], RECENT_WINDOW) < RECENT_WINDOW
             else 1.0
         )
+        # Time decay: partidos más antiguos pesan menos (mín 50% tras 6 meses)
+        try:
+            match_date = datetime.strptime(entry.get("match_date", ""), "%d/%m/%Y")
+            days_ago = max(0, (datetime.now() - match_date).days)
+            time_decay = max(0.5, 1.0 - days_ago / 365.0)
+        except (ValueError, TypeError):
+            time_decay = 1.0
+        weight *= time_decay
 
         if slot == "S1":
             key = entry["players"][0] if entry["players"] else None
@@ -316,10 +324,10 @@ def _win_prob_estimate(
     if own_ranks and riv_ranks:
         own_avg = sum(own_ranks) / len(own_ranks)
         riv_avg = sum(riv_ranks) / len(riv_ranks)
-        # En CTA el ranking es "menor = mejor". Diferencial positivo = rival más fuerte.
+        # En CTA el ranking es "menor = mejor". Diferencial positivo = rival más débil.
         diff = riv_avg - own_avg
-        # Normalizar: cada punto de ranking ≈ 0.02 de prob shift, cap a ±0.35
-        shift = max(-0.35, min(0.35, diff * 0.02))
+        # Cada 100 pts de ranking ≈ 0.07 de shift, cap a ±0.35 (dif 500+ pts)
+        shift = max(-0.35, min(0.35, diff / 500 * 0.35))
         score = 0.5 + shift
 
     # H2H entre cada jugador propio vs cada jugador rival
@@ -342,8 +350,10 @@ def _win_prob_estimate(
 
     if h2h_total > 0:
         h2h_rate = h2h_wins / h2h_total
-        # Ponderar H2H con 40% y ranking con 60% si tenemos ambos datos
-        score = score * 0.6 + h2h_rate * 0.4
+        # Confianza del H2H basada en tamaño de muestra (máx 20 rubbers = 100% peso)
+        h2h_confidence = min(1.0, h2h_total / 20.0)
+        h2h_weight = 0.4 * h2h_confidence
+        score = score * (1.0 - h2h_weight) + h2h_rate * h2h_weight
 
     return round(min(1.0, max(0.0, score)), 3)
 
@@ -484,6 +494,13 @@ def suggest_own_lineup_v2(
             # Fallback: rellenar con cualquier disponible
             extras = [c for c in all_own_cta_ids if c not in used]
             assigned_cta_ids = extras[:needed]
+            # Recalcular win_prob para el combo fallback (no usar el stale del mejor combo)
+            if assigned_cta_ids:
+                entry["expected_win_prob"] = _win_prob_estimate(
+                    assigned_cta_ids,
+                    [p["cta_id"] for p in entry["vs_players"]],
+                    rankings_cache, h2h_cache,
+                )
 
         for cid in assigned_cta_ids:
             used.add(cid)
@@ -535,13 +552,14 @@ def detect_alerts(rival_cta_id: int, prediction: list[dict]) -> list[dict]:
     if not history:
         return alerts
 
-    # Match IDs ordenados DESC (el más reciente primero)
+    # Match IDs ordenados DESC (el más reciente primero) + dict para O(1) lookup
     match_order: list[int] = []
     seen_mids: set[int] = set()
     for h in history:
         if h["match_id"] not in seen_mids:
             seen_mids.add(h["match_id"])
             match_order.append(h["match_id"])
+    match_rank = {mid: i for i, mid in enumerate(match_order)}
 
     # ── 1. First time pair (o singlista) ────────────────────────────────────
     for entry in prediction:
@@ -556,7 +574,7 @@ def detect_alerts(rival_cta_id: int, prediction: list[dict]) -> list[dict]:
         # Solo cuenta histórico anterior a los últimos 3 matches
         older_history = [
             h for h in history
-            if match_order.index(h["match_id"]) >= RECENT_WINDOW
+            if match_rank.get(h["match_id"], 999) >= RECENT_WINDOW
             and h["slot"] == slot
         ]
         if slot == "S1":
@@ -612,7 +630,7 @@ def detect_alerts(rival_cta_id: int, prediction: list[dict]) -> list[dict]:
             })
 
     # ── 3. Jugador polivalente (3+ slots distintos en últimos 5 matches) ────
-    recent_5 = [h for h in history if match_order.index(h["match_id"]) < 5]
+    recent_5 = [h for h in history if match_rank.get(h["match_id"], 999) < 5]
     player_slots: dict[int, set[str]] = defaultdict(set)
     for h in recent_5:
         for cta_id in h["players"]:
@@ -763,7 +781,8 @@ def get_timeline(rival_cta_id: int, last_n: int = 5) -> list[dict]:
             result = "?"
             if own_score is not None and opp_score is not None:
                 try:
-                    result = "W" if int(own_score) > int(opp_score) else "L"
+                    s_own, s_opp = int(own_score), int(opp_score)
+                    result = "W" if s_own > s_opp else ("D" if s_own == s_opp else "L")
                 except (ValueError, TypeError):
                     pass
 
@@ -957,3 +976,163 @@ def format_draw_report(rival_cta_id: int, last_n: int = 10) -> str:
 
     lines.append("=" * 58)
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR DE DRAW FORZADO
+# ─────────────────────────────────────────────
+def predict_forced_lineup(
+    rival_cta_id: int,
+    forced: dict,
+    own_team_cta_id: int | None = None,
+) -> dict:
+    """Evalúa una alineación forzada por el usuario contra la predicción del rival.
+
+    Args:
+        rival_cta_id: ID del equipo rival
+        forced: dict {slot: [cta_ids]} con la alineación elegida por el usuario
+                e.g. {"D1": [1, 2], "D2": [3, 4], "D3": [5, 6], "D4": [7, 8], "S1": [9]}
+        own_team_cta_id: ID del equipo propio (opcional, solo para logging)
+
+    Returns:
+        {
+            "slots": [
+                {
+                    "slot": "D1",
+                    "own_players": [{"cta_id": 1, "name": "Player 1"}, ...],
+                    "rival_players": [{"cta_id": 10, "name": "Rival 1"}, ...],
+                    "win_prob": 0.65,
+                    "rival_confidence": 0.75,
+                    "rival_badge": "fija",
+                    "reasoning": ["Ranking ventaja...", "H2H: 3V-1D", "Predicción rival: fija"],
+                    "low_data": false,
+                },
+                ...
+            ],
+            "expected_wins": 3,
+            "draw_win_prob": 0.6,
+            "rival_cta_id": rival_cta_id,
+            "generated_at": "2026-05-08T...",
+        }
+    """
+    # 1. Predecir alineación del rival
+    rival_prediction = predict_rival_lineup_v2(rival_cta_id)
+    rival_by_slot = {r["slot"]: r for r in rival_prediction}
+
+    # 2. Cargar rankings y H2H en bulk para evitar N+1 queries
+    all_own_ids = [pid for ids in forced.values() for pid in ids]
+    all_rival_ids = [
+        p["cta_id"] for r in rival_prediction for p in r.get("players", [])
+    ]
+    all_ids = list(set(all_own_ids + all_rival_ids))
+
+    rankings = database.get_bulk_player_rankings(all_ids) if all_ids else {}
+
+    # H2H — get_bulk_head_to_head_matches espera dos listas de IDs, no pares
+    h2h = database.get_bulk_head_to_head_matches(all_own_ids, all_rival_ids) \
+        if all_own_ids and all_rival_ids else {}
+
+    # 3. Calcular por slot
+    results = []
+    wins = 0
+
+    for slot in SLOTS:
+        own_ids = forced.get(slot, [])
+        rival_slot = rival_by_slot.get(slot, {})
+        rival_ids = [p["cta_id"] for p in rival_slot.get("players", [])]
+
+        # Obtener nombres de jugadores propios
+        own_meta_cache = {}
+        own_names = []
+        for pid in own_ids:
+            if pid not in own_meta_cache:
+                p = database.get_player(pid)
+                own_meta_cache[pid] = p["name"] if p else str(pid)
+            own_names.append(own_meta_cache[pid])
+
+        # Nombres del rival ya vienen en la predicción
+        rival_names = [p["name"] for p in rival_slot.get("players", [])]
+
+        # Estimar probabilidad de ganar este slot
+        prob = (
+            _win_prob_estimate(own_ids, rival_ids, rankings, h2h)
+            if own_ids and rival_ids
+            else 0.5
+        )
+
+        # Generar reasoning
+        reasons = []
+
+        # Ranking
+        own_ranks = [
+            rankings.get(pid) for pid in own_ids if rankings.get(pid) is not None
+        ]
+        rival_ranks = [
+            rankings.get(pid) for pid in rival_ids if rankings.get(pid) is not None
+        ]
+
+        if own_ranks and rival_ranks:
+            avg_own = sum(own_ranks) / len(own_ranks)
+            avg_rival = sum(rival_ranks) / len(rival_ranks)
+            diff = avg_rival - avg_own  # positivo = nosotros mejor (menor ranking = mejor)
+
+            if diff > 50:
+                reasons.append(f"Ranking ventaja ({avg_own:.0f} vs {avg_rival:.0f})")
+            elif diff < -50:
+                reasons.append(f"Ranking desventaja ({avg_own:.0f} vs {avg_rival:.0f})")
+            else:
+                reasons.append(f"Ranking similar ({avg_own:.0f} vs {avg_rival:.0f})")
+
+        # H2H entre jugadores
+        h2h_wins = h2h_losses = 0
+        for oid in own_ids:
+            for rid in rival_ids:
+                rubbers = h2h.get((oid, rid), [])
+                for r in rubbers:
+                    home_cta_set = {r.get("home_player_cta_id"), r.get("home_partner_cta_id")}
+                    won = (
+                        (r.get("winner") == "home" and oid in home_cta_set) or
+                        (r.get("winner") == "away" and oid not in home_cta_set)
+                    )
+                    if won:
+                        h2h_wins += 1
+                    else:
+                        h2h_losses += 1
+
+        if h2h_wins + h2h_losses > 0:
+            reasons.append(f"H2H: {h2h_wins}V-{h2h_losses}D entre estos jugadores")
+
+        # Confianza en la predicción del rival
+        badge = rival_slot.get("badge", "incierta")
+        reasons.append(f"Predicción rival: {badge}")
+
+        # Contar como victoria si prob >= 0.5
+        if prob >= 0.5:
+            wins += 1
+
+        results.append(
+            {
+                "slot": slot,
+                "own_players": [
+                    {"cta_id": pid, "name": name}
+                    for pid, name in zip(own_ids, own_names)
+                ],
+                "rival_players": [
+                    {"cta_id": pid, "name": name}
+                    for pid, name in zip(rival_ids, rival_names)
+                ],
+                "win_prob": round(prob, 3),
+                "rival_confidence": round(rival_slot.get("confidence", 0), 3),
+                "rival_badge": badge,
+                "reasoning": reasons,
+                "low_data": rival_slot.get("low_data", False),
+            }
+        )
+
+    return {
+        "slots": results,
+        "expected_wins": wins,
+        "draw_win_prob": round(wins / 5, 2),
+        "rival_cta_id": rival_cta_id,
+        "generated_at": datetime.now().isoformat(),
+    }

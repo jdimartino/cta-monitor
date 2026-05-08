@@ -51,12 +51,13 @@ def get_recent_matches(team_cta_id: int, limit: int = 5) -> list[dict]:
         own_score = m["home_score"] if is_home else m["away_score"]
         opp_score = m["away_score"] if is_home else m["home_score"]
 
-        result = "?"
-        if own_score and opp_score:
-            try:
-                result = "W" if int(own_score) > int(opp_score) else "L"
-            except ValueError:
-                result = "?"
+    result = "?"
+    if own_score and opp_score:
+        try:
+            s_own, s_opp = int(own_score), int(opp_score)
+            result = "W" if s_own > s_opp else ("D" if s_own == s_opp else "L")
+        except ValueError:
+            result = "?"
 
         results.append({
             "id": m["id"],
@@ -76,6 +77,7 @@ def get_win_rate(team_cta_id: int, last_n: int = None) -> dict:
 
     won = 0
     lost = 0
+    draws = 0
     total = 0
 
     for m in matches:
@@ -88,10 +90,13 @@ def get_win_rate(team_cta_id: int, last_n: int = None) -> dict:
 
         if own_score and opp_score:
             try:
-                if int(own_score) > int(opp_score):
+                s_own, s_opp = int(own_score), int(opp_score)
+                if s_own > s_opp:
                     won += 1
-                else:
+                elif s_own < s_opp:
                     lost += 1
+                else:
+                    draws += 1
                 total += 1
             except ValueError:
                 continue
@@ -99,6 +104,7 @@ def get_win_rate(team_cta_id: int, last_n: int = None) -> dict:
     return {
         "won": won,
         "lost": lost,
+        "draws": draws,
         "total": total,
         "win_rate": round(won / total, 3) if total > 0 else 0,
     }
@@ -110,14 +116,18 @@ def get_habitual_players(team_cta_id: int, last_n: int = 10) -> list[dict]:
     if not players:
         return []
 
+    # Bulk-cargar historial de todos los jugadores para evitar N+1 queries
+    all_cta_ids = [p["cta_id"] for p in players]
+    bulk_stats = database.get_bulk_player_rankings(all_cta_ids)
+    bulk_histories = {}
+    for p in players:
+        bulk_histories[p["cta_id"]] = database.get_player_match_history(p["cta_id"], last_n * 4)
+
     player_stats = []
     for p in players:
-        history = database.get_player_match_history(p["cta_id"], last_n * 4)
+        history = bulk_histories.get(p["cta_id"], [])
         wins = sum(1 for h in history if _is_winner(h, p["cta_id"]))
         total = len(history)
-
-        # Get latest stats snapshot
-        latest_stats = database.get_latest_player_stats(p["cta_id"])
 
         player_stats.append({
             "name": p["name"],
@@ -126,28 +136,36 @@ def get_habitual_players(team_cta_id: int, last_n: int = 10) -> list[dict]:
             "wins": wins,
             "losses": total - wins,
             "win_rate": round(wins / total, 3) if total > 0 else 0,
-            "ranking": latest_stats.get("ranking") if latest_stats else None,
+            "ranking": bulk_stats.get(p["cta_id"]),
         })
 
-    # Sort by appearances descending
     player_stats.sort(key=lambda x: x["appearances"], reverse=True)
     return player_stats
 
 
 def _is_winner(rubber: dict, player_cta_id: int) -> bool:
-    """Determine if the player won a rubber."""
-    if rubber.get("winner") == "home" and rubber.get("home_player_name"):
-        # Check if our player is on home side
-        # This is approximate — we'd need cta_id join for precision
-        return True
+    """Determine if the player won a rubber based on cta_ids."""
+    home_ids = {
+        rubber.get("home_player_cta_id"),
+        rubber.get("home_partner_cta_id"),
+    }
+    away_ids = {
+        rubber.get("away_player_cta_id"),
+        rubber.get("away_partner_cta_id"),
+    }
+    if player_cta_id in home_ids:
+        return rubber.get("winner") == "home"
+    if player_cta_id in away_ids:
+        return rubber.get("winner") == "away"
     return False
 
 
 def get_position_analysis(team_cta_id: int, last_n: int = 10) -> dict:
     """Analyze which players play which positions most often."""
     players = database.get_team_players(team_cta_id)
-    positions = {1: Counter(), 2: Counter(), 3: Counter(), "doubles": Counter()}
+    positions = {1: Counter(), 2: Counter(), 3: Counter(), 4: Counter(), 5: Counter(), "doubles": Counter()}
 
+    # Bulk-cargar historiales de todos los jugadores
     for p in players:
         history = database.get_player_match_history(p["cta_id"], last_n * 4)
         for h in history:
@@ -155,10 +173,9 @@ def get_position_analysis(team_cta_id: int, last_n: int = 10) -> dict:
             rtype = h.get("rubber_type", "singles")
             if rtype == "doubles":
                 positions["doubles"][p["name"]] += 1
-            elif pos in positions:
+            elif isinstance(pos, int) and pos in positions:
                 positions[pos][p["name"]] += 1
 
-    # Convert Counters to sorted lists
     result = {}
     for pos, counter in positions.items():
         result[pos] = [
@@ -186,7 +203,10 @@ def format_rival_report(team_cta_id: int) -> str:
     lines.append("")
 
     # Record
-    lines.append(f"RECORD: {record['won']}G - {record['lost']}P", )
+    record_str = f"{record['won']}G - {record['lost']}P"
+    if record.get("draws", 0) > 0:
+        record_str += f" - {record['draws']}E"
+    lines.append(f"RECORD: {record_str}")
     if record["total"] > 0:
         pct = record["win_rate"] * 100
         lines.append(f"  Win Rate: {pct:.1f}% ({record['total']} partidos)")
@@ -217,7 +237,7 @@ def format_rival_report(team_cta_id: int) -> str:
     # Position preferences
     lines.append("ALINEACION TIPICA:")
     prefs = summary["position_preferences"]
-    for pos in [1, 2, 3]:
+    for pos in [1, 2, 3, 4, 5]:
         players = prefs.get(pos, [])
         if players:
             top = players[0]
