@@ -798,6 +798,38 @@ def upsert_player_match_history(player_id: int, matches: list) -> None:
                 ),
             ).fetchone()
 
+            # Determinar si es refuerzo comparando el equipo original del jugador con el equipo donde jugó
+            is_refuerzo_value = 0
+            if m.get("club"):
+                # Obtener el equipo original del jugador
+                player_record = conn.execute(
+                    "SELECT team_id FROM players WHERE id=?", (player_id,)
+                ).fetchone()
+                
+                player_original_team_id = player_record["team_id"] if player_record else None
+                
+                if player_original_team_id is not None:
+                    # Buscar el equipo correspondiente al club donde jugó
+                    actual_team = conn.execute(
+                        "SELECT id FROM teams WHERE name LIKE ? OR name LIKE ?",
+                        (f'%{m["club"]}%', f'{m["club"]}%')
+                    ).fetchone()
+                    
+                    if actual_team:
+                        actual_team_id = actual_team["id"]
+                        # Si el equipo donde jugó es diferente al equipo original del jugador, es refuerzo
+                        is_refuerzo_value = 1 if player_original_team_id != actual_team_id else 0
+                    else:
+                        # Si no encontramos el equipo pero tenemos el nombre del club, podría ser un refuerzo
+                        # Usamos el valor original basado en parsing como fallback
+                        is_refuerzo_value = 1 if m.get("is_refuerzo") else 0 if m.get("is_refuerzo") is not None else 0
+                else:
+                    # Si no hay información del equipo original, usar el valor del parsing
+                    is_refuerzo_value = 1 if m.get("is_refuerzo") else 0 if m.get("is_refuerzo") is not None else 0
+            else:
+                # Si no hay información del club, usar el valor del parsing como fallback
+                is_refuerzo_value = 1 if m.get("is_refuerzo") else 0 if m.get("is_refuerzo") is not None else 0
+
             if existing:
                 conn.execute(
                     """UPDATE player_match_history SET
@@ -811,7 +843,7 @@ def upsert_player_match_history(player_id: int, matches: list) -> None:
                          vs_club=COALESCE(?, vs_club),
                          ranking_after=COALESCE(?, ranking_after),
                          jornada=COALESCE(?, jornada),
-                         is_refuerzo=COALESCE(?, is_refuerzo)
+                         is_refuerzo=?
                        WHERE id=?""",
                     (
                         m.get("opponent_cta_id"),
@@ -824,7 +856,7 @@ def upsert_player_match_history(player_id: int, matches: list) -> None:
                         m.get("vs_club"),
                         m.get("ranking_after"),
                         m.get("jornada"),
-                        1 if m.get("is_refuerzo") else 0 if m.get("is_refuerzo") is not None else None,
+                        is_refuerzo_value,
                         existing["id"],
                     ),
                 )
@@ -851,9 +883,49 @@ def upsert_player_match_history(player_id: int, matches: list) -> None:
                         m.get("vs_club"),
                         m.get("ranking_after"),
                         m.get("jornada"),
-                        1 if m.get("is_refuerzo") else 0,
+                        is_refuerzo_value,
                     ),
                 )
+
+
+
+def update_all_refuerzos_flags():
+    """Función para actualizar todos los flags de refuerzos en la base de datos
+    comparando el equipo original del jugador con el equipo donde aparece en el historial."""
+    with get_connection() as conn:
+        # Obtener todos los registros de historial de partidos con información del jugador
+        records = conn.execute("""
+            SELECT pmh.id, pmh.player_id, pmh.club, p.team_id as player_original_team_id
+            FROM player_match_history pmh
+            JOIN players p ON pmh.player_id = p.id
+        """).fetchall()
+        
+        updated_count = 0
+        for record in records:
+            pmh_id = record["id"]
+            player_original_team_id = record["player_original_team_id"]
+            player_club = record["club"]
+            
+            # Determinar si es refuerzo comparando equipos
+            is_refuerzo = 0
+            if player_original_team_id is not None and player_club:
+                # Buscar el equipo correspondiente al club donde jugó
+                actual_team = conn.execute(
+                    "SELECT id FROM teams WHERE name LIKE ? OR name LIKE ?",
+                    (f'%{player_club}%', f'{player_club}%')
+                ).fetchone()
+                
+                if actual_team and actual_team["id"] != player_original_team_id:
+                    is_refuerzo = 1
+            
+            # Actualizar el registro si el valor ha cambiado
+            conn.execute(
+                "UPDATE player_match_history SET is_refuerzo = ? WHERE id = ?",
+                (is_refuerzo, pmh_id)
+            )
+            updated_count += 1
+        
+        return updated_count
 
 
 # ─────────────────────────────────────────────

@@ -2101,7 +2101,16 @@ async function loadAdminUsers() {
     if (!container) return;
     container.innerHTML = '<div class="loading-spinner"></div>';
     try {
-        const res   = await authFetch('/api/admin/users');
+        const res = await authFetch('/api/admin/users');
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+                container.innerHTML = '<p class="empty-state-msg"><i class="ri-lock-line"></i> Sesión expirada. <a href="#" onclick="showLoginOverlay();return false;" style="color:var(--accent-blue);">Inicia sesión de nuevo</a></p>';
+            } else {
+                container.innerHTML = '<p class="empty-state-msg">Error al cargar usuarios (' + res.status + ').</p>';
+            }
+            if (countEl) countEl.textContent = '–';
+            return;
+        }
         const data  = await res.json();
         const users = data.users || [];
         if (countEl) countEl.textContent = `${users.length}`;
@@ -2121,7 +2130,10 @@ async function loadAdminUsers() {
             </td>
         </tr>`).join('')}
         </tbody></table>`;
-    } catch { container.innerHTML = '<p class="empty-state-msg">Error al cargar.</p>'; }
+    } catch (err) {
+        console.error('loadAdminUsers error:', err);
+        container.innerHTML = '<p class="empty-state-msg">Error de conexión al cargar usuarios.</p>';
+    }
 }
 
 function openCreateUserModal() {
@@ -2198,40 +2210,37 @@ async function loadCrawlRuns() {
     if (!container) return;
     container.innerHTML = '<div class="loading-spinner"></div>';
     try {
-        const res  = await authFetch('/api/crawl/runs');
-        const data = await res.json();
-        const runs = data.runs || [];
-        if (!runs.length) {
-            container.innerHTML = '<p class="empty-state-msg" style="font-size:13px;">Sin crawls registrados aún. El próximo Crawl Completo quedará aquí.</p>';
+        const res = await authFetch('/api/crawl/runs');
+        if (!res.ok) {
+            container.innerHTML = '<p class="empty-state-msg">Error (' + res.status + ')</p>';
             return;
         }
-        container.innerHTML = runs.map(r => {
-            const start  = new Date(r.started_at + 'Z');
-            const end    = new Date(r.finished_at + 'Z');
-            const durMin = Math.round((end - start) / 60000);
-            const isOk   = r.status === 'ok';
-            const errorsHtml = (r.error_log || []).map(e =>
-                `<details class="crawl-error-item">
-                    <summary class="crawl-error-summary">
-                        <i class="ri-error-warning-line"></i>
-                        <span>${e.split('\n')[0].slice(0, 120)}</span>
-                    </summary>
-                    <pre class="crawl-error-pre">${e.replace(/</g, '&lt;')}</pre>
-                </details>`
-            ).join('');
-            return `
-            <details class="crawl-run-item">
-                <summary class="crawl-run-summary">
-                    <span class="run-status-dot ${isOk ? 'ok' : 'err'}"></span>
-                    <span class="run-date">${start.toLocaleString('es-VE', {timeZone: 'America/Caracas'})}</span>
-                    <span class="run-stats">${r.teams ?? '—'} eq · ${r.players ?? '—'} jug · ${r.pages ?? '—'} pág · ${durMin}min</span>
-                    ${(r.errors_count > 0) ? `<span class="run-err-badge">${r.errors_count} err</span>` : ''}
-                </summary>
-                <div class="crawl-run-detail">
-                    ${errorsHtml || '<p style="font-size:12px;color:var(--accent-green);padding:8px 0;margin:0;">✓ Sin errores en este crawl.</p>'}
-                </div>
-            </details>`;
-        }).join('');
+        const data = await res.json();
+        const runs = data.runs || [];
+        if (!runs.length) { container.innerHTML = '<p class="empty-state-msg">Sin historial de crawls aún.</p>'; return; }
+        container.innerHTML = `
+        <table class="standings-table"><thead><tr>
+            <th>Fecha</th><th>Estado</th><th>Equipos</th><th>Jugadores</th><th>Páginas</th><th>Errores</th><th>Duración</th>
+        </tr></thead><tbody>
+        ${runs.map(r => {
+            const start = new Date(r.started_at);
+            const end   = r.finished_at ? new Date(r.finished_at) : null;
+            const dur   = end ? Math.round((end - start) / 1000) : null;
+            const durStr = dur !== null ? (dur >= 60 ? `${Math.floor(dur/60)}m ${dur%60}s` : `${dur}s`) : '–';
+            const badge  = r.status === 'ok'
+                ? '<span class="cat-badge cat-admin">OK</span>'
+                : `<span class="cat-badge cat-user">${r.status || '?'}</span>`;
+            return `<tr>
+                <td>${start.toLocaleString('es-CL', {dateStyle:'short', timeStyle:'short'})}</td>
+                <td>${badge}</td>
+                <td>${r.teams ?? '–'}</td>
+                <td>${r.players ?? '–'}</td>
+                <td>${r.pages ?? '–'}</td>
+                <td>${r.errors_count ?? 0}</td>
+                <td>${durStr}</td>
+            </tr>`;
+        }).join('')}
+        </tbody></table>`;
     } catch {
         container.innerHTML = '<p class="empty-state-msg">Error al cargar historial.</p>';
     }
@@ -2243,27 +2252,16 @@ async function loadCrawlErrors() {
     if (!container) return;
     container.innerHTML = '<div class="loading-spinner"></div>';
     try {
-        const res  = await authFetch('/api/crawl/errors');
-        const data = await res.json();
-        const errors = data.errors || [];
-        if (!errors.length) {
-            container.innerHTML = '<p class="empty-state-msg" style="color:var(--accent-green);font-size:13px;">✓ Sin errores registrados.</p>';
+        const res = await authFetch('/api/crawl/errors');
+        if (!res.ok) {
+            container.innerHTML = '<p class="empty-state-msg">Error (' + res.status + ')</p>';
             return;
         }
-        container.innerHTML = `
-            <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">
-                ${errors.length} error(es) reciente(s) — más reciente al final
-            </p>
-            <div class="crawl-errors-list">
-                ${errors.map((e, i) => `
-                    <details class="crawl-error-item">
-                        <summary class="crawl-error-summary">
-                            <i class="ri-error-warning-line"></i>
-                            <span>${e.split('\n')[0].slice(0, 120)}</span>
-                        </summary>
-                        <pre class="crawl-error-pre">${e.replace(/</g,'&lt;')}</pre>
-                    </details>
-                `).join('')}
-            </div>`;
+        const data = await res.json();
+        const errors = data.errors || [];
+        if (!errors.length) { container.innerHTML = '<p class="empty-state-msg">Sin errores registrados en el log.</p>'; return; }
+        container.innerHTML = errors.map(e =>
+            `<pre style="background:var(--bg-card,#1e1e2e);border:1px solid var(--danger,#e53e3e);border-radius:6px;padding:.75rem 1rem;font-size:.78rem;overflow-x:auto;white-space:pre-wrap;margin-bottom:.5rem">${e.replace(/</g,'&lt;')}</pre>`
+        ).join('');
     } catch { container.innerHTML = '<p class="empty-state-msg">Error al cargar.</p>'; }
 }

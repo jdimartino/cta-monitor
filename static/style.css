@@ -619,7 +619,8 @@ body {
 .view-section.active {
     display: block;
 }
-#view-team-detail.active {
+#view-team-detail.active,
+#view-refuerzos.active {
     flex: 1;
     min-height: 0;
     overflow-y: auto;

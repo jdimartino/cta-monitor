@@ -1204,6 +1204,20 @@ def discover_all(session=None, incremental: bool = True, max_pages: int = None) 
     teams = all_teams
     summary["teams_found"] = len(teams)
 
+    # Step 1b: Crawl group pages — fuente autoritativa de posiciones y resultados
+    total_groups = sum(len(v) for v in config.GROUPS.values())
+    print(f"[Spider] Paso 1b: Páginas de grupos ({total_groups} grupos)...")
+    for cat in config.CATEGORIES:
+        for grupo_num, group_id in config.GROUPS.get(cat["id"], []):
+            if page_limit and pages_scraped >= page_limit:
+                break
+            result = crawl_group(group_id, session, league_id=None, grupo_num=grupo_num)
+            had_error = bool(result.get("error"))
+            pages_scraped += 1
+            _stealth_break(had_error=had_error)
+            tag = result.get("error", f"{result.get('standings', 0)} standings, {result.get('fixtures', 0)} fixtures")
+            print(f"  [{cat['name']}{grupo_num}] {tag}")
+
     # Step 2: Crawl each team
     print(f"[Spider] Paso 2: Crawling {len(teams)} equipos...")
     all_players = []

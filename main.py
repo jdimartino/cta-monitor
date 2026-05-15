@@ -334,5 +334,13 @@ def healthcheck():
         sys.exit(1)
 
 
+@cli.command("refuerzos")
+def update_refuerzos():
+    """Actualizar bandera de refuerzos comparando equipo original vs. equipo del partido."""
+    click.echo("Actualizando bandera de refuerzos en la base de datos...")
+    count = database.update_all_refuerzos_flags()
+    click.echo(f"  {count} registros actualizados.")
+
+
 if __name__ == "__main__":
     cli()
