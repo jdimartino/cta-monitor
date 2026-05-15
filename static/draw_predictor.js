@@ -11,6 +11,11 @@
   let _ownTeamId  = null;  // equipo propio seleccionado en paso 2
   let _ownPlayers = [];    // [{cta_id, name}, ...]
   let _checkedIds = null;  // null = todos disponibles
+let _lastMain  = null;
+let _lastTime  = null;
+let _lastHm    = null;
+let _lastH2h   = null;
+let _lastForcedData = null;
 
   function _authHeaders() {
     const token = localStorage.getItem('cta_auth_token');
@@ -27,6 +32,8 @@
     refresh: () => load(_rivalId, _ownTeamId),
     showForcedPanel: showForcedPanel,
     calcForcedDraw: calcForcedDraw,
+    sendToWhatsApp: sendToWhatsApp,
+    sendForcedToWhatsApp: sendForcedToWhatsApp,
   };
 
   /* ═══════════════════════════════
@@ -68,6 +75,10 @@
       }
 
       _ownPlayers = ownPlayers;
+      _lastMain = main;
+      _lastTime = timeData;
+      _lastHm = hm;
+      _lastH2h = h2h;
       container.innerHTML = _render(main, timeData, hm, h2h);
       _bindEvents(container, ownPlayers);
 
@@ -94,6 +105,9 @@
         <div class="dp-controls">
           <button class="dp-mode-btn" onclick="window.DrawPredictor.showForcedPanel()" title="Modo Draw Forzado: elige manualmente la alineación">
             <i class="ri-hand-coin-line"></i> Draw Forzado
+          </button>
+          <button class="dp-whatsapp-btn" id="dp-whatsapp-btn" title="Enviar predicción a WhatsApp">
+            <i class="ri-whatsapp-line"></i> Enviar a WhatsApp
           </button>
         </div>
         <div id="dp-forced-container"></div>
@@ -492,6 +506,11 @@
         load(_rivalId, _ownTeamId);
       });
     }
+
+    const waBtn = container.querySelector('#dp-whatsapp-btn');
+    if (waBtn) {
+      waBtn.addEventListener('click', sendToWhatsApp);
+    }
   }
 
   function _esc(str) {
@@ -509,6 +528,187 @@
       ? name.split(',').reverse().map(s => s.trim())
       : name.split(' ');
     return parts.slice(0, 2).join(' ');
+  }
+
+  function _surname(name) {
+    if (!name) return '?';
+    // "Apellido, Nombre" → "Apellido"
+    return name.includes(',') ? name.split(',')[0].trim() : name.split(' ').slice(0, 2).join(' ');
+  }
+
+  /* ═══════════════════════════════════════════
+     WHATSAPP — generar texto, heatmap canvas y enviar
+  ═══════════════════════════════════════════ */
+  function _renderHeatmapCanvas(hm) {
+    if (!hm || !hm.players || !hm.players.length) return null;
+    const slots = hm.slots || ['D1','D2','D3','D4','S1'];
+    const rowsN = hm.players.length;
+    const colsN = slots.length;
+
+    const cellW = 64, cellH = 30, nameW = 140, pad = 14, headerH = 34, gap = 1, titleH = 16;
+    const cw = nameW + pad + colsN * (cellW + gap) + pad;
+    const ch = pad + titleH + gap + headerH + gap + rowsN * (cellH + gap) + pad;
+
+    const c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    const ctx = c.getContext('2d');
+
+    // bg
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, cw, ch);
+
+    // title
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 13px -apple-system,Helvetica,Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('HEATMAP · % por slot', cw / 2, pad + titleH / 2);
+
+    // header row (D1, D2, D3, D4, S1)
+    let y = pad + titleH + gap;
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, y, cw, headerH);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = 'bold 12px -apple-system,Helvetica,Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    slots.forEach((s, ci) => {
+      ctx.fillText(s, nameW + pad + ci * (cellW + gap) + cellW / 2, y + headerH / 2);
+    });
+
+    // data rows
+    y += headerH + gap;
+    hm.players.forEach((p, ri) => {
+      // name cell
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, y, nameW + pad, cellH);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '12px -apple-system,Helvetica,Arial,sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(_surname(p.name), pad, y + cellH / 2);
+
+      // data cells
+      (hm.cells[ri] || []).forEach((pct, ci) => {
+        const v = Math.round(pct * 100);
+        const x = nameW + pad + ci * (cellW + gap);
+        const g = Math.round(40 + pct * 180);
+        ctx.fillStyle = `rgb(10, ${g}, 30)`;
+        ctx.fillRect(x, y, cellW, cellH);
+        if (v > 0) {
+          ctx.fillStyle = pct > 0.5 ? '#fff' : '#94a3b8';
+          ctx.font = 'bold 12px -apple-system,Helvetica,Arial,sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(v + '%', x + cellW / 2, y + cellH / 2);
+        }
+      });
+
+      y += cellH + gap;
+    });
+
+    return c;
+  }
+
+  function _whatsappText(main, timeData, h2h) {
+    const prediction = main.prediction || [];
+    const suggestion = main.suggestion || [];
+    const alerts     = main.alerts     || [];
+    const rival      = main.rival      || {};
+    const lines = [];
+
+    lines.push(`🔮 PREDICCIÓN vs ${rival.name || 'Rival'}`);
+    if (main.low_data) lines.push('⚠️  Datos limitados — baja certeza en la predicción');
+    lines.push('');
+
+    lines.push('🏠 ALINEACIÓN RIVAL');
+    for (const s of prediction) {
+      const players = (s.players || []).map(p => _surname(p.name)).join(' + ') || '?';
+      const conf = Math.round((s.confidence || 0) * 100);
+      const badge = s.badge || 'incierta';
+      lines.push(`  ${s.slot} · ${players} (${conf}%) · ${badge}`);
+    }
+    lines.push('');
+
+    if (suggestion.length) {
+      lines.push('🏆 NUESTRA ALINEACIÓN SUGERIDA');
+      for (const s of suggestion) {
+        const our = (s.our_players || []).map(p => _surname(p.name)).join(' + ') || '?';
+        const vs  = (s.vs_players || []).map(p => _surname(p.name)).join(' + ') || '?';
+        const win = Math.round((s.expected_win_prob || 0) * 100);
+        lines.push(`  ${s.slot} · ${our} vs ${vs} → ${win}%`);
+      }
+      lines.push('');
+    }
+
+    if (alerts.length) {
+      const sevIcons = { critical: '🚨', warning: '⚠️', info: 'ℹ️' };
+      lines.push(`⚠️ ALERTAS (${alerts.length})`);
+      for (const a of alerts) {
+        const icon = sevIcons[a.severity] || '⚠️';
+        lines.push(`  ${icon} ${a.title}: ${a.detail}`);
+      }
+      lines.push('');
+    }
+
+    if (h2h) {
+      const s = h2h.season || {};
+      const a = h2h.all_time || {};
+      lines.push(`📊 H2H · Temporada ${s.won || 0}V-${s.lost || 0}D · Histórico ${a.won || 0}V-${a.lost || 0}D`);
+      lines.push('');
+    }
+
+    lines.push('🔗 cta.tenistac.site');
+    lines.push('🕐 ' + new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' }));
+
+    return lines.join('\n');
+  }
+
+  async function sendToWhatsApp() {
+    if (!_lastMain) {
+      alert('Primero debes cargar la predicción.');
+      return;
+    }
+
+    const text = _whatsappText(_lastMain, _lastTime, _lastH2h);
+    const waUrl = 'https://wa.me/?text=' + encodeURIComponent(text);
+
+    // Abrir wa.me en contexto síncrono (click del usuario) para evitar popup blocker
+    const waWindow = window.open(waUrl, '_blank');
+
+    // Generar heatmap canvas → blob (async)
+    const canvas = _renderHeatmapCanvas(_lastHm);
+    let blob = null;
+    if (canvas) {
+      blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+    }
+
+    // Web Share API (móvil: texto + imagen juntos)
+    if (navigator.share && navigator.canShare && blob) {
+      const file = new File([blob], 'heatmap.png', { type: 'image/png' });
+      const data = { text, files: [file] };
+      if (navigator.canShare(data)) {
+        try {
+          await navigator.share(data);
+          if (waWindow) waWindow.close();
+          return; // éxito
+        } catch (e) {
+          if (e.name === 'AbortError') return; // usuario canceló
+        }
+      }
+    }
+
+    // Fallback desktop: descargar PNG (wa.me ya está abierto)
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'heatmap-cta.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
   }
 
   /* ═══════════════════════════════
@@ -600,6 +800,7 @@
           resultDiv.innerHTML = `<p class="dp-error">Error: ${data.detail}</p>`;
           return;
         }
+        _lastForcedData = data;
         resultDiv.innerHTML = _renderForcedResult(data);
       })
       .catch(e => {
@@ -703,6 +904,8 @@
     const drawProbPct = Math.round(drawProb * 100);
     const drawClass = expectedWins >= 3 ? 'is-favorable' : expectedWins >= 2 ? 'is-neutral' : 'is-unfavorable';
 
+    const rivalName = _lastMain && _lastMain.rival ? _lastMain.rival.name : 'Rival';
+
     return `
       <div class="dp-forced-results-panel">
         <div class="dp-forced-summary ${drawClass}">
@@ -714,8 +917,48 @@
           </div>
         </div>
         <div class="dp-forced-matchups">${slotRows}</div>
+        <div class="dp-forced-actions">
+          <button class="dp-whatsapp-btn dp-whatsapp-btn--sm" onclick="window.DrawPredictor.sendForcedToWhatsApp()">
+            <i class="ri-whatsapp-line"></i> Enviar a WhatsApp
+          </button>
+        </div>
       </div>
     `;
+  }
+
+  function _whatsappForcedText(data) {
+    const slots = data.slots || [];
+    const expectedWins = data.expected_wins || 0;
+    const drawProb = data.draw_win_prob || 0;
+    const rivalName = (_lastMain && _lastMain.rival ? _lastMain.rival.name : 'Rival');
+    const lines = [];
+
+    lines.push('🎲 DRAW FORZADO vs ' + rivalName);
+    lines.push('');
+
+    for (const s of slots) {
+      const our = (s.own_players || []).map(p => _surname(p.name)).join(' + ');
+      const vs  = (s.rival_players || []).map(p => _surname(p.name)).join(' + ');
+      const win = Math.round((s.win_prob || 0) * 100);
+      lines.push(`  ${s.slot} · ${our} vs ${vs} → ${win}%`);
+    }
+
+    lines.push('');
+    lines.push(`📊 Resumen: ganarías ${expectedWins}/5 posiciones · ${Math.round(drawProb * 100)}% prob. del draw`);
+    lines.push('');
+    lines.push('🔗 cta.tenistac.site');
+    lines.push('🕐 ' + new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' }));
+
+    return lines.join('\n');
+  }
+
+  function sendForcedToWhatsApp() {
+    if (!_lastForcedData) {
+      alert('Primero calcula un Draw Forzado.');
+      return;
+    }
+    const text = _whatsappForcedText(_lastForcedData);
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
   }
 
 })();
