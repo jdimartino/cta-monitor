@@ -618,18 +618,31 @@ def insert_standings(team_id: int, data: dict, group_id: int = None) -> int:
 
 
 def get_latest_standings(league_id: int = None) -> list[dict]:
-    """Get the most recent standings snapshot for each team."""
+    """Get the most recent standings snapshot for each team.
+
+    Prefers the most recent row where sets_won IS NOT NULL (written by
+    crawl_group) over a row where sets_won is NULL (written by crawl_team,
+    which doesn't always parse the sets column).  This prevents the tabla de
+    posiciones from going blank after a full crawl because crawl_team runs
+    after crawl_group and would otherwise become the "latest" record.
+    """
     with get_connection() as conn:
         if league_id:
-            # For a specific league/category: only include group-page rows
-            # (sets_won IS NOT NULL) so the table reflects real group standings.
+            # For a specific league/category: prefer the most recent row that
+            # has sets data (from crawl_group).  Fall back to any row only if
+            # no row with sets exists (which should never happen in normal ops).
             query = """
                 SELECT s.*, t.name as team_name, t.cta_id as team_cta_id
                 FROM standings s
                 JOIN teams t ON s.team_id = t.id
                 WHERE s.id = (
-                    SELECT MAX(s2.id) FROM standings s2
-                    WHERE s2.team_id = s.team_id
+                    SELECT COALESCE(
+                        (SELECT MAX(s2.id) FROM standings s2
+                         WHERE s2.team_id = s.team_id
+                           AND s2.sets_won IS NOT NULL),
+                        (SELECT MAX(s2.id) FROM standings s2
+                         WHERE s2.team_id = s.team_id)
+                    )
                 )
                 AND s.sets_won IS NOT NULL
                 AND t.league_id = ?
@@ -646,8 +659,13 @@ def get_latest_standings(league_id: int = None) -> list[dict]:
                 JOIN teams t ON s.team_id = t.id
                 LEFT JOIN leagues l ON t.league_id = l.id
                 WHERE s.id = (
-                    SELECT MAX(s2.id) FROM standings s2
-                    WHERE s2.team_id = s.team_id
+                    SELECT COALESCE(
+                        (SELECT MAX(s2.id) FROM standings s2
+                         WHERE s2.team_id = s.team_id
+                           AND s2.sets_won IS NOT NULL),
+                        (SELECT MAX(s2.id) FROM standings s2
+                         WHERE s2.team_id = s.team_id)
+                    )
                 )
                 ORDER BY COALESCE(s.points, 0) DESC, COALESCE(s.won, 0) DESC
             """

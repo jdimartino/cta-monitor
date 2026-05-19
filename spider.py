@@ -1040,7 +1040,23 @@ def crawl_team(session, team_cta_id: int, incremental: bool = False) -> dict:
     team = database.get_team(team_cta_id)
     team_db_id = team["id"] if team else None
 
-    # Upsert group standings from Table 0
+    # Upsert group standings from Table 0.
+    # Recover the group_id that crawl_group() set earlier so these rows keep
+    # their group linkage.  Without this, insert_standings() stores group_id=NULL
+    # and get_latest_standings() (which filters sets_won IS NOT NULL) can no
+    # longer find the records → tabla de posiciones aparece vacía después del crawl.
+    standings_group_id: int | None = None
+    if team_db_id:
+        with database.get_connection() as _gc:
+            _row = _gc.execute(
+                """SELECT group_id FROM standings
+                   WHERE team_id = ? AND group_id IS NOT NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (team_db_id,),
+            ).fetchone()
+            if _row:
+                standings_group_id = _row["group_id"]
+
     for s in data.get("standings", []):
         db_team_id = database.upsert_team(s["cta_id"], s["name"])
         database.insert_standings(db_team_id, {
@@ -1052,7 +1068,7 @@ def crawl_team(session, team_cta_id: int, incremental: bool = False) -> dict:
             "sets_lost": s["sets_lost"],
             "games_won": s["games_won"],
             "points":    s["won"],  # no Pts column; use wins as proxy
-        })
+        }, group_id=standings_group_id)
 
     # Upsert fixtures from Table 1 (precise home/away from links)
     for f in data.get("fixtures", []):
