@@ -15,6 +15,16 @@ import os
 import time
 import hashlib
 from datetime import datetime
+import builtins
+
+# Global print override to handle closed stdout/stderr (e.g. when terminal closes)
+_orig_print = builtins.print
+def _safe_print(*args, **kwargs):
+    try:
+        _orig_print(*args, **kwargs)
+    except OSError:
+        pass
+builtins.print = _safe_print
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN — edita estos valores
