@@ -93,74 +93,84 @@ def parse_standings_page(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     teams = []
 
-    tabla = soup.find("table")
-    if not tabla:
+    tablas = soup.find_all("table")
+    if not tablas:
         logger.warning("No <table> found on standings page")
         return teams
 
-    filas = tabla.find_all("tr")
-    for fila in filas:
-        celdas = fila.find_all(["td", "th"])
-        if not celdas or len(celdas) < 2:
-            continue
-
-        # Skip header rows
-        if fila.find("th"):
-            continue
-
-        team_data = {}
-
-        # Try to find team link to extract cta_id
-        link = fila.find("a", href=re.compile(r"/cts/team_d/(\d+)/"))
-        if link:
-            match = re.search(r"/cts/team_d/(\d+)/", link["href"])
-            if match:
-                team_data["cta_id"] = int(match.group(1))
-                team_data["name"] = link.get_text(strip=True)
-
-        # Extract all cell values
-        values = [c.get_text(strip=True) for c in celdas]
-
-        # If no link found, try to get name from first text cell
-        if "name" not in team_data and values:
-            # Find the first non-numeric cell as team name
-            for v in values:
-                if v and not v.isdigit():
-                    team_data["name"] = v
-                    break
-
-        if not team_data.get("name"):
-            continue
-
-        # Try to map numeric columns to stats
-        # Typical order: Pos | Team | PJ | PG | PP | SG | SP | GG | GP | Pts
-        nums = []
-        for v in values:
-            try:
-                nums.append(int(v))
-            except ValueError:
+    for tabla in tablas:
+        filas = tabla.find_all("tr")
+        for fila in filas:
+            celdas = fila.find_all(["td", "th"])
+            if not celdas or len(celdas) < 2:
                 continue
 
-        if len(nums) >= 2:
-            team_data["position"] = nums[0] if nums else None
-            # Map remaining numbers based on count
-            if len(nums) >= 10:
-                team_data.update({
-                    "position": nums[0], "played": nums[1], "won": nums[2],
-                    "lost": nums[3], "sets_won": nums[4], "sets_lost": nums[5],
-                    "games_won": nums[6], "games_lost": nums[7], "points": nums[8],
-                })
-            elif len(nums) >= 6:
-                team_data.update({
-                    "position": nums[0], "played": nums[1], "won": nums[2],
-                    "lost": nums[3], "points": nums[-1],
-                })
-            elif len(nums) >= 3:
-                team_data.update({
-                    "position": nums[0], "played": nums[1], "points": nums[-1],
-                })
+            # Skip header rows
+            if fila.find("th"):
+                continue
 
-        teams.append(team_data)
+            team_data = {}
+
+            # Try to find team link to extract cta_id
+            link = fila.find("a", href=re.compile(r"/cts/team_d/(\d+)/"))
+            if link:
+                match = re.search(r"/cts/team_d/(\d+)/", link["href"])
+                if match:
+                    team_data["cta_id"] = int(match.group(1))
+                    team_data["name"] = link.get_text(strip=True)
+
+            # Extract all cell values
+            values = [c.get_text(strip=True) for c in celdas]
+
+            # If no link found, try to get name from first text cell
+            if "name" not in team_data and values:
+                # Find the first non-numeric cell as team name
+                for v in values:
+                    if v and not v.isdigit():
+                        team_data["name"] = v
+                        break
+
+            if not team_data.get("name"):
+                continue
+
+            # Try to map numeric columns to stats
+            # The new layout has 12 columns total:
+            # ['01', 'TACATACALozada', '60', '46', '14', '0,767', '46', '23', '0,667', '308', '226', '0,577']
+            # Typical order: Pos | Team | PJ | PG | PP | P Ave | SG | SP | Set Ave | GG | GP | G Ave
+            nums = []
+            for v in values:
+                try:
+                    nums.append(float(v.replace(",", ".")))
+                except ValueError:
+                    continue
+
+            if len(nums) >= 2:
+                team_data["position"] = int(nums[0]) if nums else None
+                # Map remaining numbers based on count
+                if len(nums) >= 11:
+                    # 0=Pos, 1=PJ, 2=PG, 3=PP, 4=P Ave, 5=SG, 6=SP, 7=Set Ave, 8=GG, 9=GP, 10=G Ave
+                    team_data.update({
+                        "position": int(nums[0]), "played": int(nums[1]), "won": int(nums[2]),
+                        "lost": int(nums[3]), "sets_won": int(nums[5]), "sets_lost": int(nums[6]),
+                        "games_won": int(nums[8]), "games_lost": int(nums[9]), "points": int(nums[2]),
+                    })
+                elif len(nums) >= 10:
+                    team_data.update({
+                        "position": int(nums[0]), "played": int(nums[1]), "won": int(nums[2]),
+                        "lost": int(nums[3]), "sets_won": int(nums[4]), "sets_lost": int(nums[5]),
+                        "games_won": int(nums[6]), "games_lost": int(nums[7]), "points": int(nums[8]),
+                    })
+                elif len(nums) >= 6:
+                    team_data.update({
+                        "position": int(nums[0]), "played": int(nums[1]), "won": int(nums[2]),
+                        "lost": int(nums[3]), "points": int(nums[-1]),
+                    })
+                elif len(nums) >= 3:
+                    team_data.update({
+                        "position": int(nums[0]), "played": int(nums[1]), "points": int(nums[-1]),
+                    })
+
+            teams.append(team_data)
 
     # Also scan for team links outside the table (sidebar, etc.)
     for link in soup.find_all("a", href=re.compile(r"/cts/team_d/(\d+)/")):
