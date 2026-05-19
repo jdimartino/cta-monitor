@@ -1556,7 +1556,7 @@ def _ensure_admin_user():
             return
         salt = secrets.token_hex(32)
         conn.execute(
-            "INSERT INTO users (username, password_hash, salt, is_admin) VALUES (?,?,?,1)",
+            "INSERT INTO users (username, password_hash, salt, is_admin, role) VALUES (?,?,?,1,'admin')",
             ("admin", _hash_password(config.ADMIN_PASSWORD, salt), salt),
         )
 

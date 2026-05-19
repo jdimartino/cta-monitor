@@ -288,22 +288,22 @@
                     <section class="full-width-section">
                         <div class="glass-panel">
                             <div class="panel-header">
-                                <h3><i class="ri-history-line"></i> Historial de Crawls</h3>
-                                <button class="secondary-btn" onclick="loadCrawlRuns()" style="font-size:12px;padding:6px 12px;">
-                                    <i class="ri-refresh-line"></i> Actualizar
-                                </button>
+                                <h3>Usuarios</h3>
+                                <span class="badge-count" id="usersCount">–</span>
                             </div>
-                            <div id="crawlRunsContainer"><p class="empty-state-msg" style="font-size:13px;">Cargando...</p></div>
+                            <div id="usersTable"><div class="loading-spinner"></div></div>
                         </div>
                     </section>
 
                     <section class="full-width-section">
                         <div class="glass-panel">
                             <div class="panel-header">
-                                <h3>Usuarios</h3>
-                                <span class="badge-count" id="usersCount">–</span>
+                                <h3><i class="ri-history-line"></i> Historial de Crawls</h3>
+                                <button class="secondary-btn" onclick="loadCrawlRuns()" style="font-size:12px;padding:6px 12px;">
+                                    <i class="ri-refresh-line"></i> Actualizar
+                                </button>
                             </div>
-                            <div id="usersTable"><div class="loading-spinner"></div></div>
+                            <div id="crawlRunsContainer" style="max-height: 280px; overflow-y: auto; border-radius: 8px;"><p class="empty-state-msg" style="font-size:13px;">Cargando...</p></div>
                         </div>
                     </section>
 
@@ -315,7 +315,7 @@
                                     <i class="ri-refresh-line"></i> Actualizar
                                 </button>
                             </div>
-                            <div id="crawlErrorsContainer"><p class="empty-state-msg" style="font-size:13px;">Haz clic en Actualizar para ver errores recientes.</p></div>
+                            <div id="crawlErrorsContainer" style="max-height: 280px; overflow-y: auto; border-radius: 8px;"><p class="empty-state-msg" style="font-size:13px;">Haz clic en Actualizar para ver errores recientes.</p></div>
                         </div>
                     </section>
                 </div>
